@@ -1,4 +1,4 @@
-# Fast reaction led button pushing
+# Fast reaction led button pushing Fas(t)-click
 
 [TOC]
 
