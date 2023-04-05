@@ -5,13 +5,12 @@
 #include <SPI.h>               // required by lcd library
 
 // configuration
-constexpr bool DEBUG = false;
 constexpr uint16_t MAX_RANGE_MM = 300;
 constexpr unsigned long DELAY_MS = 1000;
 
 // leds
 #define PIN_LEDS 4
-#define NUM_LEDS 8
+#define NUM_LEDS 8  // test led stripe
 #define BRIGHTNESS 20
 #define LED_TYPE WS2812
 #define COLOR_ORDER GRB
@@ -22,6 +21,19 @@ CRGB leds[NUM_LEDS];
 #define DC 9
 #define RST 8
 TFT tft(CS, DC, RST);
+
+// tft layout (160x128 pixels)
+//   0
+//   5 - "last" (size 2 = 20 pixels)
+//  25
+//  30 - LAST TIME (size 3 = 30 pixels)
+//  60
+//  68 - "best" (size 2 = 20 pixels)
+//  88
+//  93 - BEST TIME (size 3 = 30 pixels)
+// 123
+// 127
+
 
 // range sensors
 const uint8_t DefaultAddress = VL53L0X_I2C_ADDR;
@@ -42,7 +54,7 @@ Sensor sensors[] = {
 
 constexpr size_t N = sizeof(sensors) / sizeof(sensors[0]);  // entries in sensors[]
 
-void setID(const size_t &index, const uint8_t &address) {
+void set_tof_sensor_id(const size_t &index, const uint8_t &address) {
   // debug
   Serial.print("set sensor index ");
   Serial.print(index);
@@ -84,9 +96,8 @@ void setID(const size_t &index, const uint8_t &address) {
   delay(10);
 }
 
-char buffer[40];
-
 void write_time(const unsigned long &duration_ms, const bool &top) {
+  static char buffer[40];  // buffer to write text
   const unsigned long ms = duration_ms % 1000;
   const unsigned long s = duration_ms / 1000;
   const unsigned long sec = s % 60;
@@ -108,7 +119,7 @@ void write_time(const unsigned long &duration_ms, const bool &top) {
   tft.text(buffer, 0, y);
 }
 
-void set_leds(const CRGB &color) {
+void set_all_leds_to_color(const CRGB &color) {
   for (size_t i = 0; i < NUM_LEDS; ++i) {
     leds[i] = color;
   }
@@ -146,27 +157,30 @@ void setup() {
   // set different addresses (keep initial at 0x29 and change the others)
   // Serial.println("set addresses");
   for (size_t i = 0; i < N; ++i) {
-    setID(i, DefaultAddress + static_cast<uint8_t>(i));
+    set_tof_sensor_id(i, DefaultAddress + static_cast<uint8_t>(i));
   }
 
-  // ready
+  // init tft screen
   tft.setTextSize(2);        // 20 pixels height
   tft.stroke(230, 220, 45);  // yellow
-  tft.text("current", 0, 5);
+  tft.text("last", 0, 5);
   tft.text("best", 0, 68);
   write_time(0, true);
   write_time(0, false);
+
+  // ready
   Serial.println("ready");
-  set_leds(CRGB::Yellow);
+  set_all_leds_to_color(CRGB::Yellow);
 }
 
+// game status
 struct Status {
-  bool started = false;
-  unsigned long start_time = 0;
-  unsigned long best_time = 1000 * 60 * 60;
+  bool started = false;                      // game already started
+  unsigned long start_time = 0;              // start time in ms
+  unsigned long best_time = 1000 * 60 * 60;  // best time init to a very big value
 } status;
 
-bool check_range(const bool &debug = false) {
+bool check_range() {
   // measure
   for (size_t i = 0; i < N; ++i) {
     sensors[i].driver.rangingTest(&(sensors[i].measure), false);  // pass in 'true' to get debug data printout!
@@ -192,12 +206,12 @@ void loop() {
   // normal loop
   if (!status.started) {
     // not started => start on detection
-    if (check_range(DEBUG)) {
+    if (check_range()) {
       // start and save stamp
       status.started = true;
       status.start_time = millis();
       // turn leds green
-      set_leds(CRGB::Green);
+      set_all_leds_to_color(CRGB::Green);
       // wait to avoid double detections
       delay(DELAY_MS);
     }
@@ -205,29 +219,32 @@ void loop() {
   } else {
     // show time
     const unsigned long duration = millis() - status.start_time;
-    write_time(duration, true);
+    // write_time(duration, true); // takes around 59ms, so detections are not so reliable
+
     // started  => stop on detection
-    if (check_range(DEBUG)) {
+    if (check_range()) {
       // stop
       status.started = false;
+      // show time
+      write_time(duration, true);
       // show on screen if better than best
       if (duration < status.best_time) {
         for (size_t i = 0; i < 10; ++i) {
-          set_leds(CRGB::BlueViolet);
+          set_all_leds_to_color(CRGB::BlueViolet);
           delay(250);
-          set_leds(CRGB::White);
+          set_all_leds_to_color(CRGB::White);
           delay(250);
         }
         status.best_time = duration;
         write_time(duration, false);
       } else {
         // turn leds red
-        set_leds(CRGB::Red);
+        set_all_leds_to_color(CRGB::Red);
         // wait to avoid double detections
         delay(250 * 2 * 10);
       }
       // turn leds yellow for ready
-      set_leds(CRGB::Yellow);
+      set_all_leds_to_color(CRGB::Yellow);
     }
   }
 }
