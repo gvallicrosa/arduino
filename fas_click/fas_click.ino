@@ -11,8 +11,8 @@
 TFT tft = TFT(cs, dc, rst);
 char score_buffer[4];
 
-const int BUTTONS[] = { 11, 12, 13 };
-const int LEDS[] = { 2, 3, 4 };
+const int BUTTONS[] = { 19, 18, 17, 16, 15, 14, 31, 30, 29, 28, 27, 26, 32, 34, 36, 38, 40, 42 };
+const int LEDS[] = { 5, 6, 7, 8, 9, 10, 25, 24, 23, 22, 21, 20, 33, 35, 37, 39, 41, 43 };
 constexpr int M = sizeof(BUTTONS) / sizeof(int);
 constexpr int N = sizeof(LEDS) / sizeof(int);
 static_assert(M == N);
@@ -139,6 +139,35 @@ struct GameState {
   }
 } game_state;
 
+void test_leds_and_buttons() {
+  for (size_t i = 0; i < N; ++i) {
+    Serial.print("test index #");
+    Serial.print(i);
+    Serial.print(" with led at pin ");
+    Serial.println(LEDS[i]);
+
+    digitalWrite(LEDS[i], HIGH);
+    delay(1000);
+    digitalWrite(LEDS[i], LOW);
+  }
+
+  for (size_t i = 0; i < N; ++i) {
+    Serial.print("test index #");
+    Serial.print(i);
+    Serial.print(" with led at pin ");
+    Serial.print(LEDS[i]);
+    Serial.print(" and button at pin ");
+    Serial.println(BUTTONS[i]);
+
+    digitalWrite(LEDS[i], HIGH);
+    while (true) {
+      const int value = digitalRead(BUTTONS[i]);
+      if (value == LOW) { break; }
+    }
+    digitalWrite(LEDS[i], LOW);
+  }
+}
+
 void setup() {
   // TODO: load max count
   // tft
@@ -161,12 +190,16 @@ void setup() {
     pinMode(BUTTONS[i], INPUT_PULLUP);
     pinMode(LEDS[i], OUTPUT);
   }
-  // enable one led
-  digitalWrite(LEDS[game_state.current_led_index], HIGH);
+
   // enable serial
   Serial.begin(9600);
   Serial.print("total time ms: ");
   Serial.println(p_countdown.total_time_ms);
+  // test leds and buttons
+  test_leds_and_buttons();
+
+  // enable initial led
+  digitalWrite(LEDS[game_state.current_led_index], HIGH);
 }
 
 bool change_led_on_button_press() {
@@ -237,7 +270,7 @@ void loop() {
       }
     } else {
       // show end with leds
-      Serial.print("score");
+      Serial.print("score ");
       Serial.println(game_state.count);
       all_on_and_then_off();
       // change scores
