@@ -1,96 +1,189 @@
-#include <TFT.h>  // arduino lcd library
-#include <SPI.h>  // required by lcd library
+#include <TFT.h>      // arduino lcd library
+#include <SPI.h>      // required by lcd library
+#include <toneAC.h>   // music play library
+#include "pitches.h"  // note frequencies
+#include "melodies.h"
 
 // pin definition for the mega 2560
 #define cs 53
 #define dc 48
 #define rst 49
-TFT TFTscreen = TFT(cs, dc, rst);
+TFT tft = TFT(cs, dc, rst);
 char score_buffer[4];
-char max_score_buffer[4];
 
-const int N = 5;
-const int BUTTONS[] = { 9, 10, 11, 12, 13 };
-const int LEDS[] = { 18, 17, 16, 15, 14 };
-//const unsigned long GAME_TIME = 30000;  // 30 seconds
-const unsigned long GAME_TIME = 10000;  // 10 seconds
+const int BUTTONS[] = { 11, 12, 13 };
+const int LEDS[] = { 2, 3, 4 };
+constexpr int M = sizeof(BUTTONS) / sizeof(int);
+constexpr int N = sizeof(LEDS) / sizeof(int);
+static_assert(M == N);
 
-char serial_buffer[50];
+// const unsigned long GAME_TIME = 30000;  // 30 seconds
+const unsigned long GAME_TIME = 15000;  // 15 seconds
 
-int current_led_index = 0;
-bool game_started = false;
-unsigned long time_started;
-int count = 0;
-int max_count = 0;
-
-void write_current_score() {
-  // erase
-  TFTscreen.noStroke();
-  TFTscreen.fill(0, 0, 0);
-  TFTscreen.rect(0, 20, 160, 36);
-  // print
-  TFTscreen.stroke(255, 255, 255);
-  TFTscreen.setTextSize(5);
-  String(count).toCharArray(score_buffer, 4);
-  TFTscreen.text(score_buffer, 0, 20);
+// play a melody given an array of notes and its length
+void play(Note const *values, const size_t &size) {
+  for (size_t i = 0; i < size; ++i) {
+    const auto &[note, duration] = *values;
+    const unsigned long note_duration_ms = 1000 / duration;
+    const unsigned long pause_ms = note_duration_ms * 1.30;
+    toneAC(note, 20, note_duration_ms, false);
+    delay(pause_ms);
+    values++;
+  }
 }
 
-void write_max_score() {
+// able to play a melody without stopping the execution process
+struct BackgroundPlayer {
+  // from constructor
+  Note const *const original_pointer;  // to be able to rewind
+  Note const *pointer;
+  const size_t size;
+
+  // computed
+  unsigned long total_time_ms;
+  unsigned long next_play_time;
+  size_t index = 0;  // current playing note
+
+  // state
+  bool playing = false;
+  bool wait_for_start = true;
+
+  BackgroundPlayer(Note const *values, const size_t &size_)
+    : original_pointer(values),
+      pointer(values),
+      size(size_) {
+    // count total time
+    total_time_ms = 0;
+    for (size_t i = 0; i < size; ++i) {
+      const auto &[note, duration] = *pointer;
+      const unsigned long note_duration_ms = 1000 / duration;
+      const unsigned long pause_ms = note_duration_ms * 1.30;
+      total_time_ms += note_duration_ms + pause_ms;
+      ++pointer;
+    }
+    // reset to first note
+    reset();
+  }
+
+  void startPlayIfTimeOk(const unsigned long &current_time_ms, const unsigned long &end_time_ms) {
+    if (wait_for_start) {
+      if (current_time_ms >= end_time_ms - total_time_ms) {
+        playing = true;
+        wait_for_start = false;
+        next_play_time = current_time_ms;
+      }
+    }
+  }
+
+  void play(const unsigned long &current_time_ms) {
+    if (playing && (current_time_ms > next_play_time)) {
+      if (index >= size) {
+        playing = false;
+      } else {
+        const auto &[note, duration] = *pointer;
+        const unsigned long note_duration_ms = 1000 / duration;
+        const unsigned long pause_ms = note_duration_ms * 1.30;
+        next_play_time += note_duration_ms + pause_ms;
+        toneAC(note, 20, note_duration_ms, true);  // play in the background
+
+        // next
+        pointer++;
+        index++;
+      }
+    }
+  }
+
+  void reset() {
+    wait_for_start = true;
+    playing = false;
+    pointer = original_pointer;
+    index = 0;
+  }
+} p_countdown(m_countdown, m_countdown_size);
+
+void write_current_score(const int &value) {
   // erase
-  TFTscreen.noStroke();
-  TFTscreen.fill(0, 0, 0);
-  TFTscreen.rect(0, 80, 160, 36);
+  tft.noStroke();
+  tft.fill(0, 0, 0);
+  tft.rect(0, 20, 160, 36);
   // print
-  TFTscreen.stroke(66, 135, 245);
-  TFTscreen.setTextSize(5);
-  String(max_count).toCharArray(max_score_buffer, 4);
-  TFTscreen.text(max_score_buffer, 0, 80);
+  tft.stroke(255, 255, 255);
+  tft.setTextSize(5);
+  String(value).toCharArray(score_buffer, 4);
+  tft.text(score_buffer, 0, 20);
 }
+
+void write_max_score(const int &value) {
+  // erase
+  tft.noStroke();
+  tft.fill(0, 0, 0);
+  tft.rect(0, 80, 160, 36);
+  // print
+  tft.stroke(66, 135, 245);
+  tft.setTextSize(5);
+  String(value).toCharArray(score_buffer, 4);
+  tft.text(score_buffer, 0, 80);
+}
+
+struct GameState {
+  int current_led_index = 0;
+  bool started = false;
+  unsigned long end_time_ms;
+  int count = 0;
+  int max_count = 0;
+
+  void reset() {
+    current_led_index = 0;
+    started = false;
+    count = 0;
+  }
+} game_state;
 
 void setup() {
   // TODO: load max count
   // tft
-  TFTscreen.begin();
-  TFTscreen.background(0, 0, 0);
-  TFTscreen.stroke(255, 255, 255);
+  tft.begin();
+  tft.background(0, 0, 0);
+  tft.stroke(255, 255, 255);
   // title
-  TFTscreen.setTextSize(2);
-  TFTscreen.text("Score:\n ", 0, 0);
+  tft.setTextSize(2);
+  tft.text("Score:\n ", 0, 0);
   // current score
-  write_current_score();
+  write_current_score(game_state.count);
   // max title
-  TFTscreen.stroke(66, 135, 245);
-  TFTscreen.setTextSize(2);
-  TFTscreen.text("Maximum:\n ", 0, 60);
+  tft.stroke(66, 135, 245);
+  tft.setTextSize(2);
+  tft.text("Maximum:\n ", 0, 60);
   // current max
-  write_max_score();
+  write_max_score(game_state.max_count);
   // setup leds and pins
   for (int i = 0; i < N; ++i) {
     pinMode(BUTTONS[i], INPUT_PULLUP);
     pinMode(LEDS[i], OUTPUT);
   }
   // enable one led
-  digitalWrite(LEDS[current_led_index], HIGH);
+  digitalWrite(LEDS[game_state.current_led_index], HIGH);
   // enable serial
   Serial.begin(9600);
+  Serial.print("total time ms: ");
+  Serial.println(p_countdown.total_time_ms);
 }
 
 bool change_led_on_button_press() {
   // read only current index
-  const int value = digitalRead(BUTTONS[current_led_index]);
-
+  const int value = digitalRead(BUTTONS[game_state.current_led_index]);
   // if pressed
   if (value == LOW) {
     // turn off
-    digitalWrite(LEDS[current_led_index], LOW);
+    digitalWrite(LEDS[game_state.current_led_index], LOW);
     // get new index different from current one
     int new_index = random(0, N);
-    while (new_index == current_led_index) {
+    while (new_index == game_state.current_led_index) {
       new_index = random(0, N);
     }
-    current_led_index = new_index;
+    game_state.current_led_index = new_index;
     // turn on
-    digitalWrite(LEDS[current_led_index], HIGH);
+    digitalWrite(LEDS[game_state.current_led_index], HIGH);
     // we had input
     return true;
   }
@@ -116,40 +209,50 @@ void all_on_and_then_off() {
 }
 
 void loop() {
-  if (game_started) {
-    // check game end
-    const unsigned long diff = millis() - time_started;
-    if (diff >= GAME_TIME) {
-      // show end
-      sprintf(serial_buffer, "score %d\n", count);
-      Serial.write(serial_buffer);
-      all_on_and_then_off();
-      // reset game
-      game_started = false;
-      current_led_index = 0;
-      // wait a bit
-      delay(3000);
-      digitalWrite(LEDS[current_led_index], HIGH);
-      // change scores
-      if (count > max_count) {
-        max_count = count;
-        write_max_score();
-      }
-      count = 0;
-      write_current_score();
-    } else {
-      // keep playing and counting
-      if (change_led_on_button_press()) {
-        ++count;
-        write_current_score();
-      }
+  // current time
+  const unsigned long current_ms = millis();  // turns around in 50 days :)
+
+  // game not started yet
+  if (!game_state.started) {
+    // read only current index (initial button)
+    if (change_led_on_button_press()) {
+      // start game on button press
+      Serial.write("start game\n");
+      game_state.started = true;
+      game_state.end_time_ms = current_ms + GAME_TIME;
     }
   } else {
-    // read only current index
-    if (change_led_on_button_press()) {
-      Serial.write("start game\n");
-      game_started = true;
-      time_started = millis();  // turns around in 50 days :)
+    // play music
+    if (!p_countdown.playing) {
+      p_countdown.startPlayIfTimeOk(current_ms, game_state.end_time_ms);
+    } else {
+      p_countdown.play(current_ms);
+    }
+    // still playing?
+    if (current_ms < game_state.end_time_ms) {
+      // keep playing and counting
+      if (change_led_on_button_press()) {
+        ++game_state.count;
+        write_current_score(game_state.count);
+      }
+    } else {
+      // show end with leds
+      Serial.print("score");
+      Serial.println(game_state.count);
+      all_on_and_then_off();
+      // change scores
+      if (game_state.count > game_state.max_count) {
+        play(m_victory, m_victory_size);
+        game_state.max_count = game_state.count;
+        write_max_score(game_state.max_count);
+      }
+      // reset game
+      delay(3000);  // wait a bit
+      game_state.reset();
+      p_countdown.reset();
+      // set initial led on
+      digitalWrite(LEDS[game_state.current_led_index], HIGH);
+      write_current_score(game_state.count);
     }
   }
 }
