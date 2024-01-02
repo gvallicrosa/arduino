@@ -3,8 +3,10 @@
 #define PIN 33
 //#define NUM_LEDS 22 // DINOSAUR
 //#define NUM_LEDS 20 // DUCK
-#define NUM_LEDS 16 // BANYETES
-#define BRIGHTNESS  32
+//#define NUM_LEDS 16 // BANYETES
+#define NUM_LEDS 18 // TANJIRO
+//#define BRIGHTNESS  32
+#define BRIGHTNESS  46 // TANJIRO
 #define LED_TYPE    WS2812
 #define COLOR_ORDER GRB
 CRGB leds[NUM_LEDS];
