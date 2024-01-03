@@ -39,6 +39,7 @@ public:
         }
       }
       digitalWrite(COLS[c], LOW);
+      delay(1);
     }
   }
   bool getPressedButton(size_t &button) const {
