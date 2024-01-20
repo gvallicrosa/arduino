@@ -1,5 +1,7 @@
 # folders
 libraries/
+output/
+target/
 
 # files
 debug_custom.json
