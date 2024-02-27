@@ -78,10 +78,9 @@ void setup() {
   Serial.println(F("serial ready"));
 
   // rfid reader
-  SPI.begin();  // Init SPI bus
-  // mfrc522.PCD_Init(PIN_SS, PIN_RST);  // Init MFRC522 module
-  Serial.print(F("antenna strength: "));
-  Serial.println(mfrc522.PCD_GetAntennaGain());
+  SPI.begin();         // Init SPI bus
+  mfrc522.PCD_Init();  // Init MFRC522 module
+  delay(4);
   Serial.print(F("version: "));
   mfrc522.PCD_DumpVersionToSerial();  // Show version of PCD - MFRC522 Card Reader
 
