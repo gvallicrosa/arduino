@@ -1,9 +1,10 @@
-#include <SPI.h>               // rfid
-#include <MFRC522.h>           // rfid
-#include <Wire.h>              // lcd
 #include <Adafruit_GFX.h>      // lcd
 #include <Adafruit_SSD1306.h>  // lcd
-#include "./image.h"           // lcd
+#include <MFRC522.h>           // rfid
+#include <SPI.h>               // rfid
+#include <Wire.h>              // lcd
+
+#include "./image.h"  // lcd
 
 // lcd
 constexpr uint8_t LCD_ADDRESS = 0x3C;
@@ -21,15 +22,11 @@ const String UID_CARD("3478125b");
 // 3478125b card
 MFRC522 mfrc522(PIN_SS, PIN_RST);
 
-// TODO: invalid image
-
-void showLocked() {
+void showLocked()
+{
   display.clearDisplay();
-  display.drawBitmap(
-    display.width() - 1 - IMAGE_EYE_WIDTH,
-    (display.height() - IMAGE_EYE_HEIGHT) / 2,
-    IMAGE_EYE_DATA, IMAGE_EYE_WIDTH, IMAGE_EYE_HEIGHT,
-    SSD1306_WHITE);
+  display.drawBitmap(display.width() - 1 - IMAGE_EYE_WIDTH, (display.height() - IMAGE_EYE_HEIGHT) / 2, IMAGE_EYE_DATA,
+                     IMAGE_EYE_WIDTH, IMAGE_EYE_HEIGHT, SSD1306_WHITE);
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 10);
@@ -39,13 +36,11 @@ void showLocked() {
   display.display();
 }
 
-void showUnlocked() {
+void showUnlocked()
+{
   display.clearDisplay();
-  display.drawBitmap(
-    display.width() - 1 - IMAGE_LOCK_WIDTH,
-    (display.height() - IMAGE_LOCK_HEIGHT) / 2,
-    IMAGE_LOCK_DATA, IMAGE_LOCK_WIDTH, IMAGE_LOCK_HEIGHT,
-    SSD1306_WHITE);
+  display.drawBitmap(display.width() - 1 - IMAGE_LOCK_WIDTH, (display.height() - IMAGE_LOCK_HEIGHT) / 2,
+                     IMAGE_LOCK_DATA, IMAGE_LOCK_WIDTH, IMAGE_LOCK_HEIGHT, SSD1306_WHITE);
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 2);
@@ -56,13 +51,11 @@ void showUnlocked() {
   display.display();
 }
 
-void showInvalid() {
+void showInvalid()
+{
   display.clearDisplay();
-  display.drawBitmap(
-    display.width() - 1 - IMAGE_INVALID_WIDTH,
-    (display.height() - IMAGE_INVALID_HEIGHT) / 2,
-    IMAGE_INVALID_DATA, IMAGE_INVALID_WIDTH, IMAGE_INVALID_HEIGHT,
-    SSD1306_WHITE);
+  display.drawBitmap(display.width() - 1 - IMAGE_INVALID_WIDTH, (display.height() - IMAGE_INVALID_HEIGHT) / 2,
+                     IMAGE_INVALID_DATA, IMAGE_INVALID_WIDTH, IMAGE_INVALID_HEIGHT, SSD1306_WHITE);
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(2);
@@ -71,10 +64,15 @@ void showInvalid() {
   display.display();
 }
 
-void setup() {
+void setup()
+{
   // serial
-  Serial.begin(9600);             // Initialize serial communications with the PC
-  while (!Serial) { delay(1); };  // Do nothing if no serial port is opened (added for Arduinos based on ATMEGA32U4)
+  Serial.begin(9600);  // Initialize serial communications with the PC
+  while (!Serial)
+  {
+    delay(1);
+  };  // Do nothing if no serial port is opened (added for Arduinos based on
+      // ATMEGA32U4)
   Serial.println(F("serial ready"));
 
   // rfid reader
@@ -85,7 +83,8 @@ void setup() {
   mfrc522.PCD_DumpVersionToSerial();  // Show version of PCD - MFRC522 Card Reader
 
   // lcd
-  if (!display.begin(SSD1306_SWITCHCAPVCC, LCD_ADDRESS)) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, LCD_ADDRESS))
+  {
     Serial.println(F("SSD1306 allocation failed"));
     for (;;)
       ;  // don't proceed, loop forever
@@ -97,32 +96,40 @@ void setup() {
   Serial.println(F("setup end"));
 }
 
-
-enum class State {
+enum class State
+{
   Locked,
   Unlocked,
   Invalid,
 };
 
 constexpr unsigned long TIME_THRESHOLD_MS = 5000;
-struct Status {
+struct Status
+{
   State state = State::Locked;
   unsigned long last_time_ms = 0;
   String uid = "";
 } status;
 
-void loop() {
-  switch (status.state) {
+void loop()
+{
+  switch (status.state)
+  {
     case State::Locked:
-      if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+      if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial())
+      {
         status.uid = dumpUID(mfrc522.uid);
+        mfrc522.PICC_HaltA();  // end read
         Serial.println(status.uid);
         status.last_time_ms = millis();
-        if (status.uid == UID_EYE) {
+        if (status.uid == UID_EYE)
+        {
           Serial.println("valid rfid");
           status.state = State::Unlocked;
           showUnlocked();
-        } else {
+        }
+        else
+        {
           Serial.println("invalid rfid");
           status.state = State::Invalid;
           showInvalid();
@@ -132,24 +139,26 @@ void loop() {
     case State::Unlocked:
       [[fallthrough]];
     case State::Invalid:
-      if ((millis() - status.last_time_ms) > TIME_THRESHOLD_MS) {
+      if ((millis() - status.last_time_ms) > TIME_THRESHOLD_MS)
+      {
         Serial.println("back to locked");
         status.state = State::Locked;
         showLocked();
       }
       break;
   }
-  // mfrc522.PICC_HaltA();
-  // mfrc522.PCD_StopCrypto1();
 }
 
-String dumpUID(const MFRC522::Uid& uid) {
+String dumpUID(const MFRC522::Uid &uid)
+{
   char buffer_string[10 * 2 + 1] = { 0 };
-  char* write_start = buffer_string;
-  char* buffer_end = buffer_string + sizeof(buffer_string);
-  for (int i = 0; i < uid.size; i++) {
+  char *write_start = buffer_string;
+  char *buffer_end = buffer_string + sizeof(buffer_string);
+  for (int i = 0; i < uid.size; i++)
+  {
     // need to add 2 chars and keep space for the string terminator \0
-    if (write_start + 2 + 1 < buffer_end) {
+    if (write_start + 2 + 1 < buffer_end)
+    {
       write_start += sprintf(write_start, "%02x", uid.uidByte[i]);
     }
   }
