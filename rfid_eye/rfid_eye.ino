@@ -39,15 +39,17 @@ void showLocked()
 void showUnlocked()
 {
   display.clearDisplay();
-  display.drawBitmap(display.width() - 1 - IMAGE_LOCK_WIDTH, (display.height() - IMAGE_LOCK_HEIGHT) / 2,
+  display.drawBitmap(display.width() - 1 - IMAGE_LOCK_WIDTH - 20, (display.height() - IMAGE_LOCK_HEIGHT) / 2,
                      IMAGE_LOCK_DATA, IMAGE_LOCK_WIDTH, IMAGE_LOCK_HEIGHT, SSD1306_WHITE);
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 2);
   display.write("access granted");
+  display.setCursor(0, 24);
+  display.write("SALA");
   display.setTextSize(2);
-  display.setCursor(0, 16);
-  display.write("  4264");
+  display.setCursor(28, 16);
+  display.write("HORT");
   display.display();
 }
 
@@ -103,11 +105,13 @@ enum class State
   Invalid,
 };
 
-constexpr unsigned long TIME_THRESHOLD_MS = 5000;
+constexpr unsigned long TIME_THRESHOLD_INVALID_MS = 5 * 1000;
+constexpr unsigned long TIME_THRESHOLD_UNLOCKED_MS = 30 * 1000;
 struct Status
 {
   State state = State::Locked;
   unsigned long last_time_ms = 0;
+  unsigned long wait_time = TIME_THRESHOLD_INVALID_MS;
   String uid = "";
 } status;
 
@@ -116,6 +120,7 @@ void loop()
   switch (status.state)
   {
     case State::Locked:
+    {
       if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial())
       {
         status.uid = dumpUID(mfrc522.uid);
@@ -126,26 +131,31 @@ void loop()
         {
           Serial.println("valid rfid");
           status.state = State::Unlocked;
+          status.wait_time = TIME_THRESHOLD_UNLOCKED_MS;
           showUnlocked();
         }
         else
         {
           Serial.println("invalid rfid");
           status.state = State::Invalid;
+          status.wait_time = TIME_THRESHOLD_INVALID_MS;
           showInvalid();
         }
       }
       break;
+    }
     case State::Unlocked:
       [[fallthrough]];
     case State::Invalid:
-      if ((millis() - status.last_time_ms) > TIME_THRESHOLD_MS)
+    {
+      if ((millis() - status.last_time_ms) > status.wait_time)
       {
         Serial.println("back to locked");
         status.state = State::Locked;
         showLocked();
       }
       break;
+    }
   }
 }
 
