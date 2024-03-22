@@ -1,13 +1,13 @@
 #pragma once
 
-static constexpr size_t FILES_MAX = 10;
+static constexpr size_t FILES_MAX = 15;
 
 int endsWith(const char *str, const char *suffix) {
   if (!str || !suffix) {
     return 0;
   }
-  size_t lenstr = strlen(str);
-  size_t lensuffix = strlen(suffix);
+  const size_t lenstr = strlen(str);
+  const size_t lensuffix = strlen(suffix);
   if (lensuffix > lenstr) {
     return 0;
   }
@@ -19,7 +19,7 @@ class FileDB {
   size_t files_read = 0;
 
   void gatherSoundFiles(File &dir) {
-    Serial.println("gathered sound files");
+    Serial.println(F("gathered sound files"));
     dir.rewindDirectory();
     while (files_read < FILES_MAX) {
       SDLib::File entry = dir.openNextFile();
@@ -32,8 +32,6 @@ class FileDB {
         // all files should be in root
       } else {
         if (endsWith(entry.name(), ".WAV")) {
-          Serial.print("- ");
-          Serial.println(entry.name());
           files[files_read] = String(entry.name());
           files_read++;
         }
@@ -42,7 +40,7 @@ class FileDB {
     }
   }
 
-  void printDirectory(SDLib::File &dir, int numTabs) {
+  /*void printDirectory(SDLib::File &dir, int numTabs) {
     dir.rewindDirectory();
     while (true) {
       SDLib::File entry = dir.openNextFile();
@@ -66,27 +64,43 @@ class FileDB {
       }
       entry.close();
     }
-  }
+  }*/
 
 public:
   void gather() {
-    SDLib::File root = SD.open("/");
+    SDLib::File root = SD.open(F("/"));
     gatherSoundFiles(root);
     root.close();
   }
 
   bool hasFile(const String &filename) const {
     for (size_t i = 0; i < files_read; ++i) {
+      // Serial.print(filename);
+      // Serial.print(" = ");
+      // Serial.print(files[i]);
+      // Serial.print(" ?");
       if (filename == files[i]) {
+      // Serial.println(" yes");
         return true;
       }
+      // Serial.println(" no");
     }
     return false;
   }
 
-  void listAllFilesRecursive() {
+  /*void listAllFilesRecursive() {
     SDLib::File root = SD.open("/");
     printDirectory(root, 0);
     root.close();
+  }*/
+
+  void showFiles() const {
+    Serial.print(F("files: "));
+    Serial.println(files_read);
+    for (size_t i = 0; i < files_read; ++i) {
+      Serial.print(i);
+      Serial.print(" ");
+      Serial.println(files[i]);
+    }
   }
 };

@@ -16,6 +16,10 @@ public:
     m_filedb.gather();
   }
 
+  void showFiles()  const {
+    m_filedb.showFiles();
+  }
+
   void reset() {
     // called after a number has been dialled
     m_phone_index = 0;
@@ -37,14 +41,14 @@ public:
         m_went_through_invalid = false;
         m_phone[m_phone_index] = button;
         m_phone_index++;
-        Serial.print("add number: ");
+        Serial.print(F("add number: "));
         Serial.println(button);
         if (m_phone_index == PHONE_LEN) {
-          Serial.println("complete phone");
+          Serial.println(F("complete phone"));
           return true;
         }
       } else {
-        Serial.print("unused key: ");
+        Serial.print(F("unused key: "));
         Serial.println(button);
       }
     }
@@ -53,7 +57,7 @@ public:
 
   void call(TMRpcm &player) const {
     // construct filename
-    char buffer[16] = { 0 };
+    char buffer[8] = { 0 }; // longest XXX.WAV
     char *buffer_writter = buffer;
     for (size_t i = 0; i < PHONE_LEN; ++i) {
       buffer_writter += sprintf(buffer_writter, "%d", m_phone[i]);
@@ -69,6 +73,6 @@ public:
     }
     // not found
     Serial.println(F("file does not exist"));
-    player.play("NONE.WAV");  // not found
+    player.play(F("NONE.WAV"));  // not found
   }
 };

@@ -36,17 +36,17 @@ void setup() {
   while (!Serial) {
     delay(100);  // ms
   }
-  Serial.println("init");
 
   // sd
   delay(500);
   if (!SD.begin(PIN_SS)) {
-    Serial.println("SD init failed!");
+    Serial.println(F("SD init failed!"));
     while (true) {};
   }
 
   // gather sound files
   caller.init();
+  caller.showFiles();
 
   // wav player
   delay(500);
@@ -75,7 +75,7 @@ void loop() {
     player.stopPlayback();
     caller.reset();
     state = State::Hang;
-    Serial.println("state: hang");
+    Serial.println(F("state: hang"));
     return;  // nothing else to do
   }
 
@@ -86,15 +86,15 @@ void loop() {
       if (!is_hang) {
         last_time = millis();  // delay intro play
         state = State::Pickup;
-        Serial.println("state: pickup");
+        Serial.println(F("state: pickup"));
       }
       break;
     case State::Pickup:
       // wait 1s to start welcome message play
       if (millis() - last_time > 1000) {
-        player.play("INTRO.WAV");
+        player.play(F("INTRO.WAV"));
         state = State::Welcome;
-        Serial.println("state: welcome");
+        Serial.println(F("state: welcome"));
       }
       break;
     case State::Welcome:
@@ -103,7 +103,7 @@ void loop() {
         player.disable();  // allow tone to play in same speaker pin
         delay(300);        // wait a bit to take effect
         state = State::Dialling;
-        Serial.println("state: dialling");
+        Serial.println(F("state: dialling"));
       }
       break;
     case State::Dialling:
@@ -111,14 +111,15 @@ void loop() {
       if (caller.addNumber(bmatrix.read())) {
         caller.call(player);
         state = State::Response;
-        Serial.println("state: response");
+        Serial.println(F("state: response"));
+        caller.showFiles();
       }
       break;
     case State::Response:
       // wait for response from phone to finish
       if (!player.isPlaying()) {
         state = State::WaitToHang;
-        Serial.println("state: wait to hang");
+        Serial.println(F("state: wait to hang"));
       }
       break;
     case State::WaitToHang:

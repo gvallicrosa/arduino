@@ -39,10 +39,6 @@ constexpr unsigned int NOTE_B3 = 247;
 constexpr unsigned int NOTE_C4 = 262;
 constexpr unsigned int NOTE_D4 = 294;
 constexpr unsigned int NOTE_E4 = 330;
-constexpr unsigned int NOTE_F4 = 349;
-constexpr unsigned int NOTE_G4 = 392;
-constexpr unsigned int NOTE_A4 = 440;
-constexpr unsigned int NOTE_B4 = 494;
 
 constexpr unsigned int NOTES[] = {
   NOTE_C3,
@@ -54,11 +50,7 @@ constexpr unsigned int NOTES[] = {
   NOTE_B3,
   NOTE_C4,
   NOTE_D4,
-  NOTE_E4,
-  NOTE_F4,
-  NOTE_G4,
-  NOTE_A4,
-  NOTE_B4,
+  NOTE_E4//9
 };
 
 
