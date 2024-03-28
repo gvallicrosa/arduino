@@ -4,8 +4,6 @@
 #include <SPI.h>               // rfid
 #include <Wire.h>              // lcd
 
-#include "./image.h"  // lcd
-
 // lcd
 constexpr uint8_t LCD_ADDRESS = 0x3C;
 constexpr uint8_t LCD_WIDTH = 128;
@@ -22,49 +20,6 @@ const String UID_400("03a2bb1a");
 const String UID_800("13ef9b1a");
 MFRC522 mfrc522(PIN_SS, PIN_RST);
 
-void showLocked()
-{
-  display.clearDisplay();
-  display.drawBitmap(display.width() - 1 - IMAGE_EYE_WIDTH, (display.height() - IMAGE_EYE_HEIGHT) / 2, IMAGE_EYE_DATA,
-                     IMAGE_EYE_WIDTH, IMAGE_EYE_HEIGHT, SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 10);
-  display.write(" scan to");
-  display.setCursor(0, 20);
-  display.write("  enter");
-  display.display();
-}
-
-void showUnlocked()
-{
-  display.clearDisplay();
-  display.drawBitmap(display.width() - 1 - IMAGE_LOCK_WIDTH - 20, (display.height() - IMAGE_LOCK_HEIGHT) / 2,
-                     IMAGE_LOCK_DATA, IMAGE_LOCK_WIDTH, IMAGE_LOCK_HEIGHT, SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 2);
-  display.write("access granted");
-  display.setCursor(0, 24);
-  display.write("SALA");
-  display.setTextSize(2);
-  display.setCursor(28, 16);
-  display.write("HORT");
-  display.display();
-}
-
-void showInvalid()
-{
-  display.clearDisplay();
-  display.drawBitmap(display.width() - 1 - IMAGE_INVALID_WIDTH, (display.height() - IMAGE_INVALID_HEIGHT) / 2,
-                     IMAGE_INVALID_DATA, IMAGE_INVALID_WIDTH, IMAGE_INVALID_HEIGHT, SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(2);
-  display.setCursor(0, 10);
-  display.write(" DENIED");
-  display.display();
-}
 
 void setup()
 {
