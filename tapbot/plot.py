@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import argparse
 import re
 from dataclasses import dataclass
-from enum import IntEnum
 
 import matplotlib.pyplot as plt
-from translate import TOOL_DISABLE, TOOL_ENABLE
-from translate import Options as TranslateOptions
+from convert_from_gcode import TOOL_DISABLE, TOOL_ENABLE, Parameters
+from hersey_text import Pen
 
 
 @dataclass
@@ -16,25 +17,21 @@ class Options:
 
 def parse_arguments() -> Options:
     parser = argparse.ArgumentParser()
-    parser.add_argument("filename_gcode")
-    parser.add_argument("filename_eggbot")
+    parser.add_argument("-g", "--filename-gcode", default="")
+    parser.add_argument("-e", "--filename-eggbot", default="")
     args = parser.parse_args()
+    if not (args.filename_gcode or args.filename_eggbot):
+        parser.error("at least one file provided to plot")
     return Options(
         filename_gcode=args.filename_gcode,
         filename_eggbot=args.filename_eggbot,
     )
 
 
-class Pen(IntEnum):
-    Cut = 0
-    Move = 1
-
-
 def plot_eggbot(filename: str, ax: plt.Axes, ax_mm: plt.axes) -> None:
     pen_state = Pen.Move
     current_x_steps = 0
     current_y_steps = 0
-    options = TranslateOptions(filename="unused")
 
     with open(filename, "r") as fh:
         for line in fh.readlines():
@@ -47,14 +44,13 @@ def plot_eggbot(filename: str, ax: plt.Axes, ax_mm: plt.axes) -> None:
 
             # toolhead
             if line.startswith(TOOL_ENABLE):
-                pen_state = Pen.Cut
+                pen_state = Pen.Write
                 continue
             elif line.startswith(TOOL_DISABLE):
-                # lines.append(TOOL_DISABLE)
                 pen_state = Pen.Move
                 continue
 
-            print(repr(line))
+            # moves
             if line.startswith("SM,"):
                 temp = line.split(",")
                 delta_x_steps = int(temp[2])
@@ -64,20 +60,19 @@ def plot_eggbot(filename: str, ax: plt.Axes, ax_mm: plt.axes) -> None:
                 ax.plot(
                     [current_x_steps, current_x_steps + delta_x_steps],
                     [current_y_steps, current_y_steps + delta_y_steps],
-                    "r-" if pen_state == Pen.Cut else "r--",
+                    "r-" if pen_state == Pen.Write else "r--",
                 )
                 ax_mm.plot(
                     [
-                        current_x_steps / options.steps_per_mm_x,
-                        (current_x_steps + delta_x_steps) / options.steps_per_mm_x,
+                        current_x_steps / Parameters.steps_per_mm_x,
+                        (current_x_steps + delta_x_steps) / Parameters.steps_per_mm_x,
                     ],
                     [
-                        current_y_steps / options.steps_per_mm_y,
-                        (current_y_steps + delta_y_steps) / options.steps_per_mm_y,
+                        current_y_steps / Parameters.steps_per_mm_y,
+                        (current_y_steps + delta_y_steps) / Parameters.steps_per_mm_y,
                     ],
-                    "r-" if pen_state == Pen.Cut else "r--",
+                    "r-" if pen_state == Pen.Write else "r--",
                 )
-
                 current_x_steps += delta_x_steps
                 current_y_steps += delta_y_steps
             else:
@@ -99,12 +94,10 @@ def plot_gcode(filename: str, ax: plt.Axes) -> None:
                 continue
 
             # toolhead
-            if line.startswith("M4"):
-                # lines.append(TOOL_ENABLE)
-                pen_state = Pen.Cut
+            if line.startswith("M3") or line.startswith("M4"):
+                pen_state = Pen.Write
                 continue
             elif line.startswith("M5"):
-                # lines.append(TOOL_DISABLE)
                 pen_state = Pen.Move
                 continue
 
@@ -126,7 +119,7 @@ def plot_gcode(filename: str, ax: plt.Axes) -> None:
                 ax.plot(
                     [last_x_mm, current_x_mm],
                     [last_y_mm, current_y_mm],
-                    "b-" if pen_state == Pen.Cut else "b--",
+                    "b-" if pen_state == Pen.Write else "b--",
                 )
 
                 last_x_mm = current_x_mm
@@ -134,21 +127,12 @@ def plot_gcode(filename: str, ax: plt.Axes) -> None:
             else:
                 print(f"ignored line {repr(line)}")
 
-        # ending
-        # home to X0 Y0
-        # lines.append(
-        #     MoveSteps.from_delta(
-        #         delta_x_mm=-last_x_mm,
-        #         delta_y_mm=-last_y_mm,
-        #         options=options,
-        #     ).render()
-        # )
+        # ending: home to X0 Y0
         ax.plot(
             [last_x_mm, 0.0],
             [last_y_mm, 0.0],
-            "b-" if pen_state == Pen.Cut else "b--",
+            "b-" if pen_state == Pen.Write else "b--",
         )
-        # lines.append(MOTORS_DISABLE)
 
 
 if __name__ == "__main__":
@@ -158,11 +142,30 @@ if __name__ == "__main__":
     # translate
     fig, axs = plt.subplots(1, 2, figsize=(16, 8))
 
-    plot_gcode(filename=options.filename_gcode, ax=axs[0])
-    axs[0].set_title("gcode")
+    # limits
+    max_x_mm = 40
+    max_y_mm = 75
+    max_x_steps = max_x_mm * Parameters.steps_per_mm_x
+    max_y_steps = max_y_mm * Parameters.steps_per_mm_y
+    axs[0].plot(
+        [0, max_x_mm, max_x_mm, 0, 0],
+        [0, 0, max_y_mm, max_y_mm, 0],
+        "k-",
+    )
+    axs[0].set_title("gcode (mm)")
     axs[0].axis("equal")
-
-    plot_eggbot(filename=options.filename_eggbot, ax=axs[1], ax_mm=axs[0])
-    axs[1].set_title("eggbot")
+    axs[1].plot(
+        [0, max_x_steps, max_x_steps, 0, 0],
+        [0, 0, max_y_steps, max_y_steps, 0],
+        "k-",
+    )
+    axs[1].set_title("eggbot (steps)")
     axs[1].axis("equal")
+
+    # parsed files
+    if options.filename_gcode:
+        plot_gcode(filename=options.filename_gcode, ax=axs[0])
+    if options.filename_eggbot:
+        plot_eggbot(filename=options.filename_eggbot, ax=axs[1], ax_mm=axs[0])
+
     plt.show()

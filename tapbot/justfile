@@ -1,0 +1,19 @@
+default:
+    just --list
+
+svg filename:
+    python3 convert_from_svg.py {{filename}} -o from_svg.gcode
+    python3 convert_from_gcode.py from_svg.gcode -o from_svg.egg
+    python3 plot.py -g from_svg.gcode -e from_svg.egg
+
+gcode filename:
+    python3 convert_from_gcode.py {{filename}} -o from_gcode.egg
+    python3 plot.py -g {{filename}} -e from_gcode.egg
+
+name text:
+    python3 autoname.py {{text}} -o name.egg
+    python3 plot.py -e name.egg
+
+[confirm('Sure to send?')]
+send filename:
+    python3 send.py {{filename}}

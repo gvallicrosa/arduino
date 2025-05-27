@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+from enum import IntEnum
 
 # taken from: https://github.com/osresearch/vst/blob/master/teensyv/asteroids_font.c
 #
@@ -178,29 +181,74 @@ HERSEY_FONT_CHARS: dict[str, list[list[Point2i]]] = {
     ],
 }
 
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(1, 1, figsize=(16, 6))
-    last_plotted = Point2i(0, 0)
-    for i, c in enumerate(HERSEY_FONT_CHARS):
+class Pen(IntEnum):
+    Write = 0
+    Move = 1
+
+
+@dataclass
+class DrawPoint:
+    x_mm: float
+    y_mm: float
+    pen: Pen  # to reach it
+
+
+def write_text(text: str, max_x_mm: float) -> list[DrawPoint]:
+    total_width_mm = len(text) * (HERSEY_FONT_WIDTH + SPACING)
+    scale = max_x_mm / total_width_mm
+    lines_mm: list[DrawPoint] = []
+    for i, c in enumerate(text):
         dx = i * (HERSEY_FONT_WIDTH + SPACING)
         segments = HERSEY_FONT_CHARS[c]
         for segment in segments:
+            # could be an empty segment (i.e. " ")
             if not segment:
                 continue
-            # move to segment start
-            ax.plot(
-                [last_plotted.x, segment[0].x + dx],
-                [last_plotted.y, segment[0].y],
-                "b--",
-            )
-            for s in range(len(segment) - 1):
-                ax.plot(
-                    [segment[s].x + dx, segment[s + 1].x + dx],
-                    [segment[s].y, segment[s + 1].y],
-                    "r-",
-                )
-                last_plotted = Point2i(segment[s + 1].x + dx, segment[s + 1].y)
+            # draw the lines
+            for j, pt in enumerate(segment):
+                if j == 0:
+                    # move to segment start
+                    lines_mm.append(
+                        DrawPoint(
+                            x_mm=scale * (pt.x + dx),
+                            y_mm=scale * (pt.y),
+                            pen=Pen.Move,
+                        )
+                    )
+                else:
+                    lines_mm.append(
+                        DrawPoint(
+                            x_mm=scale * (pt.x + dx),
+                            y_mm=scale * (pt.y),
+                            pen=Pen.Write,
+                        )
+                    )
+    return lines_mm
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
+    points = write_text(
+        text="".join(HERSEY_FONT_CHARS),
+        max_x_mm=35.0,
+    )
+
+    fig, ax = plt.subplots(1, 1, figsize=(16, 6))
+    for i, pt in enumerate(points):
+        if i == 0:
+            xs = [0.0, pt.x_mm]
+            ys = [0.0, pt.y_mm]
+        else:
+            xs = [points[i - 1].x_mm, pt.x_mm]
+            ys = [points[i - 1].y_mm, pt.y_mm]
+        color = "b--" if pt.pen == Pen.Move else "r-"
+        ax.plot(
+            xs,
+            ys,
+            color,
+        )
     ax.axis("equal")
+    fig.savefig("hersey_text_test.png")
     plt.show()

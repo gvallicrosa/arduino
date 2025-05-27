@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import sys
+import time
 
 import serial
+from translate import MOTORS_DISABLE
 
 filename = sys.argv[1]
 s = serial.Serial("/dev/ttyUSB0", timeout=1.0)
@@ -10,7 +14,12 @@ with open(filename) as fh:
         # send
         print(repr(line))
         s.write(f"{line}\r\n".encode())
-        # print(f"w = {w}")
-        # time.sleep(0.01)
-        print(repr(s.read(20)))
+        print(s.readline())
+        if line.startswith("SM,"):
+            duration_ms = int(line.split(",")[1])
+            if duration_ms > 50:
+                time.sleep((duration_ms - 50) / 1000.0)
+    time.sleep(10.0)
+    s.write(f"{MOTORS_DISABLE}\r\n".encode())
+
 s.close()
