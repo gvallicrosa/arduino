@@ -5,7 +5,8 @@ import re
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
-from convert_from_gcode import TOOL_DISABLE, TOOL_ENABLE, Parameters
+from convert_from_gcode import TOOL_DISABLE, TOOL_ENABLE
+from cork import Parameters
 from hersey_text import Pen
 
 
@@ -143,13 +144,11 @@ if __name__ == "__main__":
     fig, axs = plt.subplots(1, 2, figsize=(16, 8))
 
     # limits
-    max_x_mm = 40
-    max_y_mm = 75
-    max_x_steps = max_x_mm * Parameters.steps_per_mm_x
-    max_y_steps = max_y_mm * Parameters.steps_per_mm_y
+    max_x_steps = Parameters.max_x_mm * Parameters.steps_per_mm_x
+    max_y_steps = Parameters.max_y_mm * Parameters.steps_per_mm_y
     axs[0].plot(
-        [0, max_x_mm, max_x_mm, 0, 0],
-        [0, 0, max_y_mm, max_y_mm, 0],
+        [0, Parameters.max_x_mm, Parameters.max_x_mm, 0, 0],
+        [0, 0, Parameters.max_y_mm, Parameters.max_y_mm, 0],
         "k-",
     )
     axs[0].set_title("gcode (mm)")

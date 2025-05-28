@@ -4,16 +4,12 @@ import argparse
 import math
 from dataclasses import dataclass
 
+from cork import Parameters
+
 TOOL_ENABLE = "SP,0"  # lower pen
 TOOL_DISABLE = "SP,1"
 MOTORS_DISABLE = "EM,0"
 LINE_ENDING = "\n"
-
-
-class Parameters:
-    steps_per_mm_x: int = 155  # linear: constant (measured line with known steps)
-    steps_per_mm_y: int = 85  # rotation: depends on diameter (6400 / circumference_mm)
-    steps_per_ms: float = 1.0
 
 
 @dataclass

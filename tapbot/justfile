@@ -16,8 +16,8 @@ gcode filename:
     python3 plot.py -g {{filename}} -e from_gcode.egg
 
 # generate eggbot code for a name, autoscaled to max cork length
-name text max_x_mm="35.0":
-    python3 autoname.py '{{text}}' -o name.egg --max-x-mm {{max_x_mm}}
+name text:
+    python3 autoname.py '{{text}}' -o name.egg
     python3 plot.py -e name.egg
 
 [confirm('Sure to send?')]

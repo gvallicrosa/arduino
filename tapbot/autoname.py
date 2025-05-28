@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 
 from convert_from_gcode import TOOL_DISABLE, TOOL_ENABLE, MoveSteps
+from cork import Parameters
 from hersey_text import DrawPoint, Pen, write_text
 
 
@@ -46,19 +47,16 @@ def to_machine(points_mm: list[DrawPoint]) -> list[str]:
 class Options:
     text: str
     output_filename: str
-    max_x_mm: float
 
 
 def parse_input() -> Options:
     parser = argparse.ArgumentParser()
     parser.add_argument("text", type=str)
     parser.add_argument("-o", "--output-filename", type=str, default="autoname.egg")
-    parser.add_argument("-x", "--max-x-mm", type=float, default=35.0)
     args = parser.parse_args()
     return Options(
         text=args.text,
         output_filename=args.output_filename,
-        max_x_mm=args.max_x_mm,
     )
 
 
@@ -69,7 +67,7 @@ def main() -> None:
     # parse
     points_mm = write_text(
         text=options.text,
-        max_x_mm=options.max_x_mm,
+        max_x_mm=Parameters.max_x_mm,
     )
     lines = to_machine(points_mm=points_mm)
 
