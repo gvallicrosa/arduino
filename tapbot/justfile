@@ -1,17 +1,23 @@
+# install with:
+#  curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/bin
+
 default:
     just --list
 
+# compute gcode on an svg and then translate to eggbot
 svg filename:
     python3 convert_from_svg.py {{filename}} -o from_svg.gcode
     python3 convert_from_gcode.py from_svg.gcode -o from_svg.egg
     python3 plot.py -g from_svg.gcode -e from_svg.egg
 
+# translate gcode (i.e. from LaserWeb) to eggbot
 gcode filename:
     python3 convert_from_gcode.py {{filename}} -o from_gcode.egg
     python3 plot.py -g {{filename}} -e from_gcode.egg
 
-name text:
-    python3 autoname.py {{text}} -o name.egg
+# generate eggbot code for a name, autoscaled to max cork length
+name text max_x_mm="35.0":
+    python3 autoname.py '{{text}}' -o name.egg --max-x-mm {{max_x_mm}}
     python3 plot.py -e name.egg
 
 [confirm('Sure to send?')]

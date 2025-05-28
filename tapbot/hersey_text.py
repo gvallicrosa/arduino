@@ -198,7 +198,7 @@ def write_text(text: str, max_x_mm: float) -> list[DrawPoint]:
     total_width_mm = len(text) * (HERSEY_FONT_WIDTH + SPACING)
     scale = max_x_mm / total_width_mm
     lines_mm: list[DrawPoint] = []
-    for i, c in enumerate(text):
+    for i, c in enumerate(text.upper()):
         dx = i * (HERSEY_FONT_WIDTH + SPACING)
         segments = HERSEY_FONT_CHARS[c]
         for segment in segments:

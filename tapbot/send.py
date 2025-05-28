@@ -4,7 +4,7 @@ import sys
 import time
 
 import serial
-from translate import MOTORS_DISABLE
+from convert_from_gcode import MOTORS_DISABLE
 
 filename = sys.argv[1]
 s = serial.Serial("/dev/ttyUSB0", timeout=1.0)
@@ -15,6 +15,8 @@ with open(filename) as fh:
         print(repr(line))
         s.write(f"{line}\r\n".encode())
         print(s.readline())
+        if line.startswith("SP,"):
+            time.sleep(0.75)
         if line.startswith("SM,"):
             duration_ms = int(line.split(",")[1])
             if duration_ms > 50:
