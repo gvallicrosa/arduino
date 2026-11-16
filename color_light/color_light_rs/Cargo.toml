@@ -1,0 +1,52 @@
+[package]
+name = "color_light"
+version = "0.1.0"
+edition = "2021"
+
+# [[bin]]
+# name = "simple"
+# path = "srs/simple.rs"
+
+[dependencies]
+# simple
+esp-backtrace = { version = "0.12.0", features = [
+    "esp32",
+    "exception-handler",
+    "panic-handler",
+    "println",
+] }
+esp-hal = { version = "0.18.0", features = [ "esp32", "async"] }
+esp-hal-smartled = { version = "0.11.0", features = [ "esp32" ] }
+esp-println = { version = "0.9.1", features = ["esp32", "log"] }
+log = { version = "0.4.21" }
+ws2812-spi = "0.4"
+smart-leds = "0.4"
+# ble example
+esp-wifi = {version = "0.6.0" , features = ["esp32", "ble", "async"]}
+bleps               = { git = "https://github.com/bjoernQ/bleps", package = "bleps", rev = "a5148d8ae679e021b78f53fd33afb8bb35d0b62e", features = [ "macros", "async"] }
+# ble embassy (also from async in others)
+esp-hal-embassy = {version = "0.1", features = ["time-timg0", "integrated-timers"]}
+embassy-executor = {version = "0.5", features = ["executor-thread", "task-arena-size-16384"]}
+embassy-sync = "0.6"
+embassy-time = "0.3"
+# static_cell = "2.1"
+# embassy ={ version = "*"}
+
+
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.dev.package.esp-wifi]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1 # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false
