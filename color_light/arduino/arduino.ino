@@ -4,7 +4,8 @@
 //#define NUM_LEDS 22 // DINOSAUR
 //#define NUM_LEDS 20 // DUCK
 //#define NUM_LEDS 16 // BANYETES
-#define NUM_LEDS 18 // TANJIRO
+//#define NUM_LEDS 18 // TANJIRO
+#define NUM_LEDS 15 // test
 //#define BRIGHTNESS  32
 #define BRIGHTNESS  46 // TANJIRO
 #define LED_TYPE    WS2812
