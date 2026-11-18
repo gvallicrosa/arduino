@@ -1,45 +1,45 @@
 [package]
 name = "color_light"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
-# [[bin]]
-# name = "simple"
-# path = "srs/simple.rs"
+[features]
+# Which figure the firmware is built for (sets the LED count).
+# Pick one with e.g. `cargo run --release --no-default-features --features duck`.
+default = ["dinosaur"]
+dinosaur = []
+duck = []
+banyetes = []
+tanjiro = []
+test = []
 
 [dependencies]
-# simple
-esp-backtrace = { version = "0.12.0", features = [
-    "esp32",
-    "exception-handler",
-    "panic-handler",
-    "println",
-] }
-esp-hal = { version = "0.18.0", features = [ "esp32", "async"] }
-esp-hal-smartled = { version = "0.11.0", features = [ "esp32" ] }
-esp-println = { version = "0.9.1", features = ["esp32", "log"] }
-log = { version = "0.4.21" }
-ws2812-spi = "0.4"
+esp-hal = { version = "~1.2", features = ["esp32", "log-04", "unstable"] }
+esp-rtos = { version = "0.4", features = ["esp32", "embassy", "esp-radio", "esp-alloc", "log-04"] }
+esp-radio = { version = "=1.0.0-beta.1", features = ["esp32", "ble", "esp-alloc", "log-04", "unstable"] }
+esp-alloc = { version = "0.11", features = ["esp32"] }
+esp-backtrace = { version = "0.20", features = ["esp32", "panic-handler", "println"] }
+esp-println = { version = "0.18", features = ["esp32", "log-04"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["esp32"] }
+esp-hal-smartled = "0.18"
 smart-leds = "0.4"
-# ble example
-esp-wifi = {version = "0.6.0" , features = ["esp32", "ble", "async"]}
-bleps               = { git = "https://github.com/bjoernQ/bleps", package = "bleps", rev = "a5148d8ae679e021b78f53fd33afb8bb35d0b62e", features = [ "macros", "async"] }
-# ble embassy (also from async in others)
-esp-hal-embassy = {version = "0.1", features = ["time-timg0", "integrated-timers"]}
-embassy-executor = {version = "0.5", features = ["executor-thread", "task-arena-size-16384"]}
-embassy-sync = "0.6"
-embassy-time = "0.3"
-# static_cell = "2.1"
-# embassy ={ version = "*"}
+log = "0.4"
 
-
+embassy-executor = "0.10"
+embassy-futures = "0.1"
+embassy-sync = "0.8"
+embassy-time = "0.5"
+# trouble-host 0.8 needs bt-hci 0.10, but esp-radio 1.0.0-beta.1 is on bt-hci 0.9.
+trouble-host = { version = "0.7", features = ["default-packet-pool-mtu-255", "derive"] }
+# Used by the #[gatt_server] macro.
+static_cell = "2.1"
 
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
 
-[profile.dev.package.esp-wifi]
+[profile.dev.package.esp-radio]
 opt-level = 3
 
 [profile.release]
@@ -50,3 +50,4 @@ incremental = false
 lto = 'fat'
 opt-level = 's'
 overflow-checks = false
+

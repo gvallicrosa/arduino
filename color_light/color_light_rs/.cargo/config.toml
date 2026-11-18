@@ -1,22 +1,17 @@
 [target.xtensa-esp32-none-elf]
-# runner = "espflash flash --monitor --no-skip"
 runner = "espflash flash --monitor"
-
-
-[env]
-# ESP_LOGLEVEL="INFO"
-ESP_LOGLEVEL="TRACE"
-
-[build]
 rustflags = [
-  # "-C", "link-arg=-nostartfiles",
-  # ble example
-  # "-C", "link-arg=-Tlinkall.x", # fails
-  "-C", "link-arg=-Trom_functions.x",
+  "-C", "link-arg=-Wl,-Tlinkall.x",
   "-C", "link-arg=-nostartfiles",
 ]
 
+[env]
+# Log level for the `log` macros (error, warn, info, debug, trace).
+# Can also be filtered per module, e.g. "info,trouble_host=warn".
+ESP_LOG = "info"
+
+[build]
 target = "xtensa-esp32-none-elf"
 
 [unstable]
-build-std = ["core"]
+build-std = ["alloc", "core"]
