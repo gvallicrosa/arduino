@@ -1,12 +1,14 @@
 //! BLE controlled WS2812B light.
 //!
-//! - advertises as `led_light` with one custom GATT service
-//! - `mode` characteristic (1 byte, read/write): 0 = rainbow, 1 = fixed, 2 = pulsating
-//! - `color` characteristic (3 bytes RGB, read/write): color used by fixed and pulsating modes
-//! - `brightness`, `rainbow_speed`, `rainbow_span`, `pulse_speed` characteristics (read/write),
-//!   see `LightService` and the README
+//! - advertises as `led_light_<figure>` with one custom GATT service
+//! - `mode` characteristic (1 byte, read/write): 0 = rainbow, 1 = fixed, 2 = pulsating,
+//!   3 = candle, 4 = fade between two colors, 5 = twinkle
+//! - `color` characteristic (3 bytes RGB, read/write): color used by every mode but rainbow
+//! - `color2`, `brightness` and speed characteristics (read/write), see `LightService` and the
+//!   README
+//! - a connection with no writes for `IDLE_DISCONNECT` is dropped
 //!
-//! The LED count is chosen per figure with a cargo feature (see `Cargo.toml`).
+//! The LED count and name are chosen per figure with a cargo feature (see `Cargo.toml`).
 
 #![no_std]
 #![no_main]
@@ -14,7 +16,10 @@
 use core::{cell::Cell, ops::RangeInclusive};
 
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::{
+    join::join,
+    select::{Either, select},
+};
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use esp_alloc as _;
@@ -38,18 +43,28 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // Build configuration
 // ---------------------------------------------------------------------------
 
-/// Number of LEDs of the figure, selected with a cargo feature.
-const LED_NUM: usize = if cfg!(feature = "duck") {
-    20
+struct Figure {
+    leds: usize,
+    /// Bluetooth name, so several figures can be told apart in the phone's device list.
+    /// Keep the `led_light` prefix: the web app looks for it. At most 22 bytes.
+    name: &'static str,
+}
+
+/// The figure, selected with a cargo feature.
+const FIGURE: Figure = if cfg!(feature = "duck") {
+    Figure { leds: 20, name: "led_light_duck" }
 } else if cfg!(feature = "banyetes") {
-    16
+    Figure { leds: 16, name: "led_light_banyetes" }
 } else if cfg!(feature = "tanjiro") {
-    18
+    Figure { leds: 18, name: "led_light_tanjiro" }
 } else if cfg!(feature = "test") {
-    15
+    Figure { leds: 15, name: "led_light_test" }
 } else {
-    22 // dinosaur (default)
+    Figure { leds: 22, name: "led_light_dinosaur" }
 };
+const LED_NUM: usize = FIGURE.leds;
+const BLE_NAME: &str = FIGURE.name;
+const _: () = assert!(BLE_NAME.len() <= 22, "trouble-host limits the GAP name to 22 bytes");
 const _: () = assert!(
     cfg!(feature = "dinosaur") as u8
         + cfg!(feature = "duck") as u8
@@ -101,19 +116,45 @@ const RAINBOW_PERIOD_MS: u64 = 25_600;
 /// slides by one full wheel per rainbow period.
 const RAINBOW_SPAN_DEFAULT: u16 = 90;
 const RAINBOW_SPAN_RANGE: RangeInclusive<u16> = 0..=360;
+/// Duration of one full fade (first color -> second color -> first color) at 100 % speed.
+const FADE_PERIOD_MS: u64 = 12_000;
+/// Twinkle mode: LEDs glow at `TWINKLE_MIN` (0-255) and now and then one flares up to full and
+/// back down over `TWINKLE_MS`. Each LED waits `TWINKLE_GAP_MS` on average between flares. Both
+/// times are for 100 % speed.
+const TWINKLE_MIN: u8 = 90;
+const TWINKLE_MS: u64 = 2_000;
+const TWINKLE_GAP_MS: u64 = 6_000;
+/// Candle mode: the flame level (0-255) wanders between `CANDLE_CALM_MIN` and full, with a dip
+/// down to `CANDLE_DIP_MIN` for one in `CANDLE_DIP_ONE_IN` new targets. Each LED adds its own
+/// small variation, down to `CANDLE_LED_MIN`. Dimmer means redder, like a real flame.
+const CANDLE_CALM_MIN: u8 = 225;
+const CANDLE_DIP_MIN: u8 = 170;
+const CANDLE_DIP_ONE_IN: u32 = 40;
+const CANDLE_LED_MIN: u8 = 235;
+/// How long the flame and each LED keep a target before picking a new one, in frames.
+const CANDLE_FLAME_HOLD: RangeInclusive<u32> = ms_to_frames(40)..=ms_to_frames(160);
+const CANDLE_LED_HOLD: RangeInclusive<u32> = ms_to_frames(60)..=ms_to_frames(300);
 /// Animation speeds are a percentage of the periods above (200 = twice as fast).
 const SPEED_DEFAULT: u16 = 100;
-/// Accepted speeds. The upper bound also keeps `advance` from overflowing.
+/// Accepted speeds. The upper bound also keeps `cycle_fraction` from overflowing.
 const SPEED_RANGE: RangeInclusive<u16> = 10..=1000;
 /// Time between LED frames. Kept short (200 Hz) so temporal dithering is not visible.
 const FRAME_MS: u64 = 5;
 
-const BLE_NAME: &str = "led_light";
+const fn ms_to_frames(ms: u64) -> u32 {
+    (ms / FRAME_MS) as u32
+}
+
 /// Light service UUID `937312e0-2354-11eb-9f10-fbc30a62cf38`, little-endian for advertising.
 const LIGHT_SERVICE_UUID_LE: [u8; 16] = [
     0x38, 0xcf, 0x62, 0x0a, 0xc3, 0xfb, 0x10, 0x9f, 0xeb, 0x11, 0x54, 0x23, 0xe0, 0x12, 0x73, 0x93,
 ];
 const INITIAL_COLOR: [u8; 3] = [255, 0, 0];
+/// Second color of the fade mode.
+const INITIAL_COLOR2: [u8; 3] = [0, 0, 255];
+/// A connection with no writes for this long is dropped. Only one central can be connected at a
+/// time, so this keeps a forgotten client (e.g. a browser tab left open) from locking others out.
+const IDLE_DISCONNECT: Duration = Duration::from_secs(120);
 
 // ---------------------------------------------------------------------------
 // Shared state between BLE and the LED task
@@ -124,6 +165,9 @@ enum Mode {
     Rainbow,
     Fixed,
     Pulsating,
+    Candle,
+    Fade,
+    Twinkle,
 }
 
 impl Mode {
@@ -132,6 +176,9 @@ impl Mode {
             0 => Some(Mode::Rainbow),
             1 => Some(Mode::Fixed),
             2 => Some(Mode::Pulsating),
+            3 => Some(Mode::Candle),
+            4 => Some(Mode::Fade),
+            5 => Some(Mode::Twinkle),
             _ => None,
         }
     }
@@ -142,7 +189,10 @@ impl Mode {
 #[derive(Clone, Copy, Debug)]
 struct Settings {
     mode: Mode,
+    /// Used by every mode but rainbow.
     color: RGB8,
+    /// Second color of the fade mode.
+    color2: RGB8,
     /// Percent of `BRIGHTNESS_MAX_SCALE`.
     brightness: u8,
     /// Percent of the speed set by `RAINBOW_PERIOD_MS`.
@@ -151,16 +201,27 @@ struct Settings {
     rainbow_span: u16,
     /// Percent of the speed set by `PULSE_PERIOD_MS`.
     pulse_speed: u16,
+    /// Percent of the speed set by `FADE_PERIOD_MS`.
+    fade_speed: u16,
+    /// Percent of the speed set by `TWINKLE_MS` and `TWINKLE_GAP_MS`.
+    twinkle_speed: u16,
+}
+
+const fn rgb8([r, g, b]: [u8; 3]) -> RGB8 {
+    RGB8 { r, g, b }
 }
 
 /// Values at boot; they must match the initial values of `LightService`.
 static SETTINGS: Mutex<CriticalSectionRawMutex, Cell<Settings>> = Mutex::new(Cell::new(Settings {
     mode: Mode::Rainbow,
-    color: RGB8 { r: INITIAL_COLOR[0], g: INITIAL_COLOR[1], b: INITIAL_COLOR[2] },
+    color: rgb8(INITIAL_COLOR),
+    color2: rgb8(INITIAL_COLOR2),
     brightness: BRIGHTNESS_DEFAULT,
     rainbow_speed: SPEED_DEFAULT,
     rainbow_span: RAINBOW_SPAN_DEFAULT,
     pulse_speed: SPEED_DEFAULT,
+    fade_speed: SPEED_DEFAULT,
+    twinkle_speed: SPEED_DEFAULT,
 }));
 
 fn update_settings(f: impl FnOnce(&mut Settings)) {
@@ -237,6 +298,15 @@ struct LightService {
     #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Pulse Speed (%)")]
     #[characteristic(uuid = "9d7312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = SPEED_DEFAULT)]
     pulse_speed: u16,
+    #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Second Color")]
+    #[characteristic(uuid = "9e7312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = INITIAL_COLOR2)]
+    color2: [u8; 3],
+    #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Fade Speed (%)")]
+    #[characteristic(uuid = "9f7312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = SPEED_DEFAULT)]
+    fade_speed: u16,
+    #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Twinkle Speed (%)")]
+    #[characteristic(uuid = "a07312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = SPEED_DEFAULT)]
+    twinkle_speed: u16,
 }
 
 async fn ble_run<C: Controller>(controller: C) -> ! {
@@ -347,20 +417,31 @@ fn in_range<T: PartialOrd>(range: RangeInclusive<T>) -> impl FnOnce(T) -> Result
 
 /// Handle GATT requests until the central disconnects. Valid writes update `SETTINGS` and are
 /// stored by the server (so reads return them); invalid ones are rejected and change nothing.
+/// The connection is dropped after `IDLE_DISCONNECT` without writes.
 async fn gatt_events<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
     let light = &server.light;
+    let mut last_write = Instant::now();
     let reason = loop {
-        let reply = match conn.next().await {
+        let event = match select(conn.next(), Timer::at(last_write + IDLE_DISCONNECT)).await {
+            Either::First(event) => event,
+            Either::Second(()) => {
+                info!("[gatt] no writes for {} s, disconnecting", IDLE_DISCONNECT.as_secs());
+                conn.raw().disconnect();
+                last_write = Instant::now(); // ask again later if the link doesn't go down
+                continue;
+            }
+        };
+        let reply = match event {
             GattConnectionEvent::Disconnected { reason } => break reason,
             GattConnectionEvent::Gatt { event: GattEvent::Write(w) } => {
+                last_write = Instant::now();
                 let h = w.handle();
                 let result = if h == light.mode.handle {
                     written(&w, &light.mode)
                         .and_then(|m| Mode::from_byte(m).ok_or(AttErrorCode::VALUE_NOT_ALLOWED))
                         .map(|m| update_settings(|s| s.mode = m))
                 } else if h == light.color.handle {
-                    written(&w, &light.color)
-                        .map(|[r, g, b]| update_settings(|s| s.color = RGB8::new(r, g, b)))
+                    written(&w, &light.color).map(|c| update_settings(|s| s.color = rgb8(c)))
                 } else if h == light.brightness.handle {
                     written(&w, &light.brightness)
                         .and_then(in_range(BRIGHTNESS_RANGE))
@@ -377,6 +458,16 @@ async fn gatt_events<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'
                     written(&w, &light.pulse_speed)
                         .and_then(in_range(SPEED_RANGE))
                         .map(|v| update_settings(|s| s.pulse_speed = v))
+                } else if h == light.color2.handle {
+                    written(&w, &light.color2).map(|c| update_settings(|s| s.color2 = rgb8(c)))
+                } else if h == light.fade_speed.handle {
+                    written(&w, &light.fade_speed)
+                        .and_then(in_range(SPEED_RANGE))
+                        .map(|v| update_settings(|s| s.fade_speed = v))
+                } else if h == light.twinkle_speed.handle {
+                    written(&w, &light.twinkle_speed)
+                        .and_then(in_range(SPEED_RANGE))
+                        .map(|v| update_settings(|s| s.twinkle_speed = v))
                 } else {
                     Ok(()) // not ours: let the server validate it
                 };
@@ -423,8 +514,10 @@ fn gamma_level(level: u16) -> u32 {
     a + (b - a) * f / 256
 }
 
-/// 8.8 fixed-point channels (0..=255.0), so slow fades keep sub-step precision until dithering.
+/// 8.8 fixed-point channels (0..=255.0) before gamma, so slow fades keep sub-step precision.
 type Rgb16 = [u16; 3];
+/// Light output per channel (gamma applied), 0..=65535. Colors are dimmed and blended in this space.
+type Linear = [u16; 3];
 
 /// Full level (255.0) in 8.8 fixed point.
 const FULL: u16 = 255 << 8;
@@ -433,12 +526,29 @@ fn rgb16(c: RGB8) -> Rgb16 {
     [(c.r as u16) << 8, (c.g as u16) << 8, (c.b as u16) << 8]
 }
 
+fn linear(c: Rgb16) -> Linear {
+    c.map(|x| gamma_level(x) as u16)
+}
+
+/// `c` dimmed to `level` (8.8 fixed point, gamma corrected like a color channel).
+fn dim(c: Linear, level: u16) -> Linear {
+    let l = gamma_level(level);
+    c.map(|x| (x as u32 * l / 65535) as u16)
+}
+
+/// `a` blended towards `b` by `t` (65536 = all `b`). Blending linear light keeps the brightness
+/// steady; blending before gamma would go dark halfway between two different colors.
+fn mix(a: Linear, b: Linear, t: u32) -> Linear {
+    // 65535 * 65536 still fits in u32.
+    core::array::from_fn(|i| ((a[i] as u32 * (65536 - t) + b[i] as u32 * t) >> 16) as u16)
+}
+
 /// Fully saturated, full value color at `hue` (0..=65535 is one turn of the wheel: red, yellow,
 /// green, cyan, blue, magenta). Unlike `smart_leds::hsv2rgb` (8-bit hue, 8-bit channels, steps of
 /// 6/255), channels change continuously with the hue.
 fn rainbow(hue: u16) -> Rgb16 {
     let pos = hue as u32 * 6;
-    let up = ((pos & 0xffff) * FULL as u32 >> 16) as u16;
+    let up = (((pos & 0xffff) * FULL as u32) >> 16) as u16;
     let down = FULL - up;
     match pos >> 16 {
         0 => [FULL, up, 0],
@@ -450,40 +560,115 @@ fn rainbow(hue: u16) -> Rgb16 {
     }
 }
 
+/// Part of a cycle (2^32 = one cycle) that passes in `elapsed_us`, for a cycle that lasts
+/// `period_ms` at 100 % `speed`.
+fn cycle_fraction(elapsed_us: u64, period_ms: u64, speed: u16) -> u64 {
+    // elapsed_us <= 1 s and speed <= 1000 % keep this below 2^64.
+    (elapsed_us.min(1_000_000) << 32) * speed as u64 / (period_ms * 1000 * 100)
+}
+
 /// Advance an animation phase (2^32 = one cycle) by `elapsed_us`, for a cycle that lasts
 /// `period_ms` at 100 % `speed`. Accumulating the phase, instead of deriving it from the clock,
 /// keeps the animation continuous when the speed changes.
 fn advance(phase: u32, elapsed_us: u64, period_ms: u64, speed: u16) -> u32 {
-    // elapsed_us <= 1 s and speed <= 1000 % keep this below 2^64.
-    let delta = (elapsed_us.min(1_000_000) << 32) * speed as u64 / (period_ms * 1000 * 100);
-    phase.wrapping_add(delta as u32) // whole cycles wrap away
+    phase.wrapping_add(cycle_fraction(elapsed_us, period_ms, speed) as u32) // whole cycles wrap away
 }
 
-/// Pulsating level (8.8 fixed point) at `phase`: a triangle wave from `PULSE_MIN` up to 255 and
-/// back down over one cycle.
-fn pulse_level(phase: u32) -> u16 {
-    let up = if phase < 1 << 31 { phase } else { phase.wrapping_neg() } as u64; // 0..=2^31
-    let min = (PULSE_MIN as u64) << 8;
-    let max = 255u64 << 8;
-    (min + ((max - min) * up >> 31)) as u16
+/// Triangle wave over one cycle of `phase`: 0, up to 2^31 halfway, back to 0.
+fn triangle(phase: u32) -> u32 {
+    if phase < 1 << 31 { phase } else { phase.wrapping_neg() }
 }
 
-/// Turn the base colors into the bytes sent to the LEDs.
-///
-/// Gamma, `level` and the brightness `scale` (1/65536 of full output) are applied with 8
-/// fractional bits; the fraction is then spread over successive frames (temporal dithering,
-/// `dither` keeps the per-channel error). Without this, low brightness leaves only ~16 levels per
-/// channel and fades visibly step.
-fn render(
-    base: &[Rgb16; LED_NUM],
+/// Level (8.8 fixed point) going from `min` (0-255) up to full and back down over one cycle.
+fn swell(phase: u32, min: u8) -> u16 {
+    let min = (min as u64) << 8;
+    (min + (((FULL as u64 - min) * triangle(phase) as u64) >> 31)) as u16
+}
+
+/// Blend amount of the fade mode at `phase` (0..=65536): from the first color to the second and
+/// back, easing in and out so it lingers on each color (smoothstep).
+fn fade_amount(phase: u32) -> u32 {
+    let t = (triangle(phase) >> 15) as u64; // 0..=65536
+    ((t * t * (3 * 65536 - 2 * t)) >> 32) as u32
+}
+
+/// `c` dimmed to `level` like a flame: green and blue are dimmed by the square of the level, so
+/// dips also turn redder.
+fn flame(c: Linear, level: u16) -> Linear {
+    let l = gamma_level(level);
+    let [r, g, b] = dim(c, level);
+    [r, (g as u32 * l / 65535) as u16, (b as u32 * l / 65535) as u16]
+}
+
+/// Xorshift PRNG for the candle and twinkle modes, which only need noise.
+struct Rng(u32);
+
+impl Rng {
+    fn next(&mut self) -> u32 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.0 = x;
+        x
+    }
+
+    fn in_range(&mut self, range: RangeInclusive<u32>) -> u32 {
+        let span = (range.end() - range.start()) as u64 + 1;
+        range.start() + ((self.next() as u64 * span) >> 32) as u32
+    }
+}
+
+/// A level (8.8 fixed point) that eases towards a random target, picking a new one every few frames.
+#[derive(Clone, Copy)]
+struct Flicker {
     level: u16,
+    target: u16,
+    frames_left: u32,
+}
+
+impl Flicker {
+    const STEADY: Self = Self { level: FULL, target: FULL, frames_left: 0 };
+
+    /// Advance one frame. A new target is taken from `pick` when the last one has been held for
+    /// its random number of frames from `hold`.
+    fn step(
+        &mut self,
+        rng: &mut Rng,
+        hold: RangeInclusive<u32>,
+        pick: impl FnOnce(&mut Rng) -> u32,
+    ) -> u16 {
+        if self.frames_left == 0 {
+            self.target = pick(rng) as u16;
+            self.frames_left = rng.in_range(hold);
+        }
+        self.frames_left = self.frames_left.saturating_sub(1);
+        // Move 1/8 of the way each frame (~40 ms time constant): smooth, but still a flicker.
+        let diff = self.target as i32 - self.level as i32;
+        self.level = (self.level as i32 + diff / 8) as u16;
+        self.level
+    }
+}
+
+/// 8.8 fixed-point level of a 0-255 value.
+fn level(v: u8) -> u32 {
+    (v as u32) << 8
+}
+
+/// Turn the colors into the bytes sent to the LEDs.
+///
+/// The brightness `scale` (1/65536 of full output) is applied with 8 fractional bits; the
+/// fraction is then spread over successive frames (temporal dithering, `dither` keeps the
+/// per-channel error). Without this, low brightness leaves only ~16 levels per channel and fades
+/// visibly step.
+fn render(
+    base: &[Linear; LED_NUM],
     scale: u32,
     dither: &mut [[u8; 3]; LED_NUM],
 ) -> [RGB8; LED_NUM] {
-    let level = gamma_level(level);
     let channel = |x: u16, acc: &mut u8| -> u8 {
         // 8.8 fixed point output value; 65535 * 65536 still fits in u32.
-        let v = gamma_level(x) * level / 65535 * scale / 65536;
+        let v = x as u32 * scale / 65536;
         let sum = *acc as u32 + (v & 0xff);
         *acc = (sum & 0xff) as u8;
         ((v >> 8) + (sum >> 8)) as u8
@@ -508,16 +693,22 @@ async fn led_task(rmt: RMT<'static>, pin: GPIO33<'static>) {
         LedStrip::new_with_memsize(WS2812B_TIMING, rmt.channel0, pin, RMT_MEMSIZE, rmt_freq)
             .expect("LED strip init");
 
-    let mut base = [Rgb16::default(); LED_NUM];
+    let mut base = [Linear::default(); LED_NUM];
     // Start each LED at a different dither phase so leftover blips don't hit all LEDs together.
     let mut dither = [[0u8; 3]; LED_NUM];
     for (i, acc) in dither.iter_mut().enumerate() {
         *acc = [(i * 256 / LED_NUM) as u8; 3];
     }
 
-    // Animation phases only advance while their mode is shown, so switching back resumes.
+    // Animation state only advances while its mode is shown, so switching back resumes.
     let mut rainbow_phase = 0u32;
     let mut pulse_phase = 0u32;
+    let mut fade_phase = 0u32;
+    let mut flame_flicker = Flicker::STEADY;
+    let mut led_flicker = [Flicker::STEADY; LED_NUM];
+    // Phase of each LED's twinkle, `None` while it waits for the next one.
+    let mut stars = [None::<u32>; LED_NUM];
+    let mut rng = Rng(0x9e37_79b9);
     let mut last = Instant::now();
     let mut ticker = Ticker::every(Duration::from_millis(FRAME_MS));
 
@@ -526,16 +717,13 @@ async fn led_task(rmt: RMT<'static>, pin: GPIO33<'static>) {
         let now = Instant::now();
         let elapsed_us = (now - last).as_micros();
         last = now;
+        let color = linear(rgb16(s.color));
 
-        let level = match s.mode {
-            Mode::Fixed => {
-                base.fill(rgb16(s.color));
-                FULL
-            }
+        match s.mode {
+            Mode::Fixed => base.fill(color),
             Mode::Pulsating => {
                 pulse_phase = advance(pulse_phase, elapsed_us, PULSE_PERIOD_MS, s.pulse_speed);
-                base.fill(rgb16(s.color));
-                pulse_level(pulse_phase)
+                base.fill(dim(color, swell(pulse_phase, PULSE_MIN)));
             }
             Mode::Rainbow => {
                 rainbow_phase =
@@ -545,14 +733,49 @@ async fn led_task(rmt: RMT<'static>, pin: GPIO33<'static>) {
                 let span = s.rainbow_span as u32 * 65536 / 360;
                 for (i, led) in base.iter_mut().enumerate() {
                     let offset = (span * i as u32 / LED_NUM as u32) as u16;
-                    *led = rainbow(hue.wrapping_add(offset));
+                    *led = linear(rainbow(hue.wrapping_add(offset)));
                 }
-                FULL
             }
-        };
+            Mode::Fade => {
+                fade_phase = advance(fade_phase, elapsed_us, FADE_PERIOD_MS, s.fade_speed);
+                let color2 = linear(rgb16(s.color2));
+                base.fill(mix(color, color2, fade_amount(fade_phase)));
+            }
+            Mode::Candle => {
+                // One flame for the whole figure, plus a small flicker of its own on each LED.
+                let flame_level = flame_flicker.step(&mut rng, CANDLE_FLAME_HOLD, |rng| {
+                    if rng.next() % CANDLE_DIP_ONE_IN == 0 {
+                        rng.in_range(level(CANDLE_DIP_MIN)..=level(CANDLE_CALM_MIN))
+                    } else {
+                        rng.in_range(level(CANDLE_CALM_MIN)..=level(255))
+                    }
+                });
+                for (led, flicker) in base.iter_mut().zip(&mut led_flicker) {
+                    let own = flicker.step(&mut rng, CANDLE_LED_HOLD, |rng| {
+                        rng.in_range(level(CANDLE_LED_MIN)..=level(255))
+                    });
+                    *led = flame(color, (flame_level as u32 * own as u32 / FULL as u32) as u16);
+                }
+            }
+            Mode::Twinkle => {
+                // Chance of a waiting LED starting a twinkle this frame, 2^32 = certain.
+                let start = cycle_fraction(elapsed_us, TWINKLE_GAP_MS, s.twinkle_speed);
+                for (led, star) in base.iter_mut().zip(&mut stars) {
+                    *star = match *star {
+                        None => ((rng.next() as u64) < start).then_some(0),
+                        Some(phase) => {
+                            let next = advance(phase, elapsed_us, TWINKLE_MS, s.twinkle_speed);
+                            (next >= phase).then_some(next) // wrapped around: done
+                        }
+                    };
+                    let level = star.map_or(level(TWINKLE_MIN) as u16, |p| swell(p, TWINKLE_MIN));
+                    *led = dim(color, level);
+                }
+            }
+        }
 
         let scale = BRIGHTNESS_MAX_SCALE * s.brightness as u32 / 100;
-        let frame = render(&base, level, scale, &mut dither);
+        let frame = render(&base, scale, &mut dither);
         if let Err(e) = led_strip.write(frame).await {
             warn!("[led] write error: {e:?}");
         }

@@ -21,6 +21,7 @@
     --danger: #c0392b;
     --ok: #1f9d55;
     --light: #ff0000;
+    --light2: #0000ff;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
@@ -80,6 +81,7 @@
   .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .status[data-state="connected"]::before { background: var(--ok); }
   .status[data-state="connecting"]::before { background: var(--accent); animation: blink 1s infinite; }
+  .status[data-state="standby"]::before { background: var(--ok); opacity: .45; }
   @keyframes blink { 50% { opacity: .2; } }
 
   .glow {
@@ -99,9 +101,33 @@
     animation: spin var(--spin, 6s) linear infinite;
   }
   .glow[data-mode="2"] .orb { animation: pulse var(--pulse, 3.1s) ease-in-out infinite alternate; }
+  .glow[data-mode="3"] .orb { animation: flicker 1.7s linear infinite; }
+  .glow[data-mode="4"] .orb { animation: fade var(--fade, 6s) ease-in-out infinite alternate; }
+  .glow[data-mode="5"] .orb {
+    position: relative;
+    background: color-mix(in srgb, var(--light) 45%, var(--surface));
+    box-shadow: 0 0 30px 6px color-mix(in srgb, var(--light) 40%, transparent);
+  }
+  .glow[data-mode="5"] .orb::before, .glow[data-mode="5"] .orb::after {
+    content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--light); box-shadow: 0 0 12px 5px var(--light);
+    opacity: 0; animation: twinkle var(--twinkle, 3s) ease-in-out infinite;
+  }
+  .glow[data-mode="5"] .orb::before { left: 14px; top: 16px; }
+  .glow[data-mode="5"] .orb::after { right: 12px; bottom: 14px; animation-delay: calc(var(--twinkle, 3s) * -.55); }
   .glow[data-off] .orb { background: var(--border); box-shadow: none; animation: none; }
+  .glow[data-off] .orb::before, .glow[data-off] .orb::after { display: none; }
   @keyframes spin { to { transform: rotate(1turn); } }
   @keyframes pulse { from { opacity: .4; } to { opacity: 1; } }
+  @keyframes flicker {
+    0%, 100% { opacity: 1; } 12% { opacity: .86; } 24% { opacity: .96; } 33% { opacity: .62; }
+    40% { opacity: .93; } 58% { opacity: .84; } 71% { opacity: 1; } 84% { opacity: .88; }
+  }
+  @keyframes fade {
+    from { background: var(--light); box-shadow: 0 0 40px 12px var(--light); }
+    to { background: var(--light2); box-shadow: 0 0 40px 12px var(--light2); }
+  }
+  @keyframes twinkle { 0%, 45%, 100% { opacity: 0; } 22% { opacity: 1; } }
 
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; }
 
@@ -125,6 +151,14 @@
   }
   .modes button svg { width: 22px; height: 22px; }
   .modes button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
+
+  .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+  .slots button {
+    min-height: 44px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg);
+    display: flex; align-items: center; justify-content: center; gap: 8px; font-size: .9rem;
+  }
+  .slots button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .slots .dot { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border); }
 
   .swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
   .swatches button {
@@ -164,7 +198,7 @@
 <body>
 <main>
   <header>
-    <h1>Color Light</h1>
+    <h1 id="title">Color Light</h1>
     <span class="status" id="status" data-state="disconnected">Disconnected</span>
   </header>
 
@@ -203,6 +237,18 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3" fill="currentColor"/><circle cx="12" cy="12" r="8" opacity=".5"/></svg>
           Pulsating
         </button>
+        <button data-mode="3" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3c.5 3 5 5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-4 2.5-5 .3 1.5 1 2.5 2 3 .8-2.5.5-5.5.5-8z"/></svg>
+          Candle
+        </button>
+        <button data-mode="4" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6" fill="currentColor" fill-opacity=".45"/></svg>
+          Fade
+        </button>
+        <button data-mode="5" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M10 3l1.6 5.4L17 10l-5.4 1.6L10 17l-1.6-5.4L3 10l5.4-1.6z"/><path d="M18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z"/></svg>
+          Twinkle
+        </button>
       </div>
       <div class="setting" id="rainbowSpeedRow">
         <label for="rainbowSpeed">Speed</label>
@@ -219,6 +265,16 @@
         <output id="pulseSpeedOut" for="pulseSpeed">1×</output>
         <input type="range" id="pulseSpeed" min="-100" max="100" value="0">
       </div>
+      <div class="setting" id="fadeSpeedRow">
+        <label for="fadeSpeed">Speed</label>
+        <output id="fadeSpeedOut" for="fadeSpeed">1×</output>
+        <input type="range" id="fadeSpeed" min="-100" max="100" value="0">
+      </div>
+      <div class="setting" id="twinkleSpeedRow">
+        <label for="twinkleSpeed">Speed</label>
+        <output id="twinkleSpeedOut" for="twinkleSpeed">1×</output>
+        <input type="range" id="twinkleSpeed" min="-100" max="100" value="0">
+      </div>
     </section>
 
     <section class="card" id="brightnessRow">
@@ -232,7 +288,11 @@
 
   <fieldset id="colors" disabled>
     <section class="card">
-      <h2>Color</h2>
+      <h2 id="colorTitle">Color</h2>
+      <div class="slots" id="slots" role="group" aria-label="Color to change" hidden>
+        <button data-slot="color" aria-pressed="true"><span class="dot" style="background: var(--light)"></span>First</button>
+        <button data-slot="color2" aria-pressed="false"><span class="dot" style="background: var(--light2)"></span>Second</button>
+      </div>
       <div class="swatches" id="swatches" role="group" aria-label="Preset colors"></div>
       <div class="custom">
         <label for="picker">Custom color</label>
@@ -252,8 +312,9 @@
 const SERVICE = '937312e0-2354-11eb-9f10-fbc30a62cf38';
 const MODE_CHAR = '937312e0-2354-11eb-9f10-fbc30a62cf38';
 const COLOR_CHAR = '987312e0-2354-11eb-9f10-fbc30a62cf38';
-const NAME = 'led_light';
-const MODE = { rainbow: 0, fixed: 1, pulsating: 2 };
+const COLOR2_CHAR = '9e7312e0-2354-11eb-9f10-fbc30a62cf38';
+const NAME_PREFIX = 'led_light'; // the firmware advertises led_light_<figure>
+const MODE = { rainbow: 0, fixed: 1, pulsating: 2, candle: 3, fade: 4, twinkle: 5 };
 
 // Numeric settings, one slider each. `value` maps the slider position to what is sent to the
 // light and `position` maps it back, so the default sits mid-slider and both ends feel as far.
@@ -275,6 +336,8 @@ const SLIDERS = [
     value: (p) => p, position: (v) => v,
     label: (v) => (v === 0 ? '1 color' : `${v}°`), mode: MODE.rainbow },
   { key: 'pulseSpeed', uuid: '9d7312e0-2354-11eb-9f10-fbc30a62cf38', ...speed, mode: MODE.pulsating },
+  { key: 'fadeSpeed', uuid: '9f7312e0-2354-11eb-9f10-fbc30a62cf38', ...speed, mode: MODE.fade },
+  { key: 'twinkleSpeed', uuid: 'a07312e0-2354-11eb-9f10-fbc30a62cf38', ...speed, mode: MODE.twinkle },
 ];
 
 const PRESETS = [
@@ -284,39 +347,60 @@ const PRESETS = [
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  status: $('status'), glow: $('glow'), connect: $('connect'), forget: $('forget'),
-  controls: $('controls'), colors: $('colors'), swatches: $('swatches'),
+  status: $('status'), title: $('title'), glow: $('glow'), connect: $('connect'), forget: $('forget'),
+  controls: $('controls'), colors: $('colors'), swatches: $('swatches'), colorTitle: $('colorTitle'),
+  slots: $('slots'), slotButtons: [...document.querySelectorAll('#slots button')],
   picker: $('picker'), hex: $('hex'), message: $('message'), unsupported: $('unsupported'),
   modeButtons: [...document.querySelectorAll('.modes button')],
 };
 for (const s of SLIDERS) {
-  Object.assign(s, { input: $(s.key), output: $(`${s.key}Out`), row: $(`${s.key}Row`), char: null, supported: true });
+  Object.assign(s, { input: $(s.key), output: $(`${s.key}Out`), row: $(`${s.key}Row`), supported: true });
 }
 
 let device = null;
-let modeChar = null;
-let colorChar = null;
+// Characteristics of the connected light by setting name (`mode`, `color`, `color2`, slider keys).
+let chars = {};
+// disconnected | connecting | connected | standby (link dropped, reconnects on the next change) |
+// waking (reconnecting from standby; the controls stay usable)
 let state = 'disconnected';
 let userDisconnect = false;
-let reconnecting = false;
+let waking = null; // the reconnect started from standby, while it runs
+let newModes = true; // candle, fade and twinkle: false on older firmware
+let editing = 'color'; // which color the swatches change in fade mode
 // Firmware boot values, shown until the light is read.
-let current = { mode: MODE.rainbow, color: '#ff0000', brightness: 25, rainbowSpeed: 100, rainbowSpan: 90, pulseSpeed: 100 };
+let current = {
+  mode: MODE.rainbow, color: '#ff0000', color2: '#0000ff', brightness: 25,
+  rainbowSpeed: 100, rainbowSpan: 90, pulseSpeed: 100, fadeSpeed: 100, twinkleSpeed: 100,
+};
 
 // ---------------------------------------------------------------------------
 // UI
 // ---------------------------------------------------------------------------
 
+const STATUS = {
+  disconnected: 'Disconnected', connecting: 'Connecting…', connected: 'Connected',
+  standby: 'Standby', waking: 'Connecting…',
+};
+
 function setState(s) {
   state = s;
-  ui.status.dataset.state = s;
-  ui.status.textContent = { disconnected: 'Disconnected', connecting: 'Connecting…', connected: 'Connected' }[s];
-  const connected = s === 'connected';
-  ui.controls.disabled = !connected;
-  ui.colors.disabled = !connected;
-  ui.connect.disabled = s === 'connecting';
-  ui.connect.textContent = connected ? 'Disconnect' : device ? 'Reconnect' : 'Connect';
+  ui.status.dataset.state = s === 'waking' ? 'connecting' : s;
+  ui.status.textContent = STATUS[s];
+  ui.status.title = s === 'standby' ? 'The light drops idle connections. Changing anything reconnects.' : '';
+  const usable = s === 'connected' || s === 'standby' || s === 'waking';
+  ui.controls.disabled = !usable;
+  ui.colors.disabled = !usable;
+  ui.connect.disabled = s === 'connecting' || s === 'waking';
+  ui.connect.textContent = usable ? 'Disconnect' : device ? 'Reconnect' : 'Connect';
   ui.forget.hidden = !(device && s === 'disconnected');
-  if (connected) delete ui.glow.dataset.off; else ui.glow.dataset.off = '';
+  if (usable) delete ui.glow.dataset.off; else ui.glow.dataset.off = '';
+  ui.title.textContent = lightName();
+}
+
+// "Dinosaur light" for `led_light_dinosaur`.
+function lightName() {
+  const figure = (device?.name ?? '').replace(/^led_light_?/, '');
+  return figure ? `${figure[0].toUpperCase()}${figure.slice(1)} light` : 'Color Light';
 }
 
 function say(text, isError = false) {
@@ -325,20 +409,34 @@ function say(text, isError = false) {
 }
 
 function render() {
+  const fade = current.mode === MODE.fade;
+  if (!fade) editing = 'color';
+  const shown = current[editing];
   ui.glow.dataset.mode = current.mode;
-  document.documentElement.style.setProperty('--light', current.color);
-  ui.modeButtons.forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.mode) === current.mode)));
-  [...ui.swatches.children].forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.color === current.color)));
-  ui.picker.value = current.color;
-  ui.hex.textContent = current.color;
+  const css = document.documentElement.style;
+  css.setProperty('--light', current.color);
+  css.setProperty('--light2', current.color2);
+  ui.modeButtons.forEach((b) => {
+    const mode = Number(b.dataset.mode);
+    b.hidden = mode > MODE.pulsating && !newModes;
+    b.setAttribute('aria-pressed', String(mode === current.mode));
+  });
+  ui.colorTitle.textContent = fade ? 'Colors' : 'Color';
+  ui.slots.hidden = !fade;
+  ui.slotButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.slot === editing)));
+  [...ui.swatches.children].forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.color === shown)));
+  ui.picker.value = shown;
+  ui.hex.textContent = shown;
   for (const s of SLIDERS) {
     s.row.hidden = !s.supported || (s.mode !== undefined && s.mode !== current.mode);
     s.output.textContent = s.label(current[s.key]);
     if (document.activeElement !== s.input) s.input.value = s.position(current[s.key]);
   }
   // Preview animations follow the speeds (the CSS durations are for 100 %).
-  document.documentElement.style.setProperty('--spin', `${600 / current.rainbowSpeed}s`);
-  document.documentElement.style.setProperty('--pulse', `${310 / current.pulseSpeed}s`);
+  css.setProperty('--spin', `${600 / current.rainbowSpeed}s`);
+  css.setProperty('--pulse', `${310 / current.pulseSpeed}s`);
+  css.setProperty('--fade', `${600 / current.fadeSpeed}s`);
+  css.setProperty('--twinkle', `${300 / current.twinkleSpeed}s`);
 }
 
 for (const c of PRESETS) {
@@ -352,30 +450,45 @@ for (const c of PRESETS) {
 
 // ---------------------------------------------------------------------------
 // GATT writes: one operation at a time (Web Bluetooth rejects overlapping ones),
-// and only the latest value per characteristic is kept while one is in flight,
+// and only the latest value per setting is kept while one is in flight,
 // so dragging the color picker doesn't build up a backlog.
+// The light drops connections after 2 minutes without writes (so a forgotten
+// client doesn't lock others out): the first change after that reconnects.
 // ---------------------------------------------------------------------------
 
-const pending = new Map();
-let pumping = false;
+const pending = new Map(); // setting name -> bytes
 
-function queueWrite(key, characteristic, bytes) {
-  pending.set(key, { characteristic, bytes });
+function queueWrite(key, bytes) {
+  pending.set(key, bytes);
   pump();
 }
+
+let pumping = false;
 
 async function pump() {
   if (pumping) return;
   pumping = true;
   try {
     while (pending.size) {
-      const [key, { characteristic, bytes }] = pending.entries().next().value;
+      if (state !== 'connected') {
+        if (!(await wake())) { pending.clear(); return; }
+        continue;
+      }
+      const [key, bytes] = pending.entries().next().value;
       pending.delete(key);
+      const characteristic = chars[key];
+      if (!characteristic) continue;
       try {
         if (characteristic.writeValueWithResponse) await characteristic.writeValueWithResponse(bytes);
         else await characteristic.writeValue(bytes);
       } catch (e) {
-        if (state === 'connected') say(`Write failed: ${e.message}`, true);
+        if (device && !device.gatt.connected) {
+          // The link went down under this write: send it again after reconnecting.
+          if (!pending.has(key)) pending.set(key, bytes);
+          onDisconnected();
+        } else {
+          say(`Write failed: ${e.message}`, true);
+        }
       }
     }
   } finally {
@@ -383,22 +496,28 @@ async function pump() {
   }
 }
 
+const rgbBytes = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return new Uint8Array([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
+};
+
 function setMode(mode) {
   current.mode = mode;
   render();
-  queueWrite('mode', modeChar, new Uint8Array([mode]));
+  queueWrite('mode', new Uint8Array([mode]));
 }
 
 function setColor(hex) {
-  current.color = hex.toLowerCase();
-  const n = parseInt(current.color.slice(1), 16);
-  queueWrite('color', colorChar, new Uint8Array([(n >> 16) & 255, (n >> 8) & 255, n & 255]));
+  const key = current.mode === MODE.fade ? editing : 'color';
+  current[key] = hex.toLowerCase();
+  queueWrite(key, rgbBytes(current[key]));
   // The color is not shown in rainbow mode, so picking one switches to fixed.
   if (current.mode === MODE.rainbow) setMode(MODE.fixed);
   else render();
 }
 
 ui.modeButtons.forEach((b) => b.addEventListener('click', () => setMode(Number(b.dataset.mode))));
+ui.slotButtons.forEach((b) => b.addEventListener('click', () => { editing = b.dataset.slot; render(); }));
 ui.swatches.addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (b) setColor(b.dataset.color);
@@ -408,10 +527,10 @@ ui.picker.addEventListener('input', () => setColor(ui.picker.value));
 for (const s of SLIDERS) {
   s.input.addEventListener('input', () => {
     const v = s.value(Number(s.input.value));
-    if (v === current[s.key] || !s.char) return;
+    if (v === current[s.key] || !s.supported) return;
     current[s.key] = v;
     render();
-    queueWrite(s.key, s.char, new Uint8Array(s.size === 1 ? [v] : [v & 255, v >> 8])); // little-endian
+    queueWrite(s.key, new Uint8Array(s.size === 1 ? [v] : [v & 255, v >> 8])); // little-endian
   });
 }
 
@@ -424,84 +543,89 @@ const toHex = (v) => '#' + [0, 1, 2].map((i) => v.getUint8(i).toString(16).padSt
 async function connect() {
   if (!device) {
     device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [SERVICE] }, { name: NAME }],
+      filters: [{ services: [SERVICE] }, { namePrefix: NAME_PREFIX }],
       optionalServices: [SERVICE],
     });
     device.addEventListener('gattserverdisconnected', onDisconnected);
   }
-  setState('connecting');
+  setState(state === 'standby' ? 'waking' : 'connecting');
   say('');
   const server = await device.gatt.connect();
   const service = await server.getPrimaryService(SERVICE);
-  modeChar = await service.getCharacteristic(MODE_CHAR);
-  colorChar = await service.getCharacteristic(COLOR_CHAR);
+  const found = {
+    mode: await service.getCharacteristic(MODE_CHAR),
+    color: await service.getCharacteristic(COLOR_CHAR),
+    color2: await service.getCharacteristic(COLOR2_CHAR).catch(() => null), // missing on older firmware
+  };
   // Show what the light is doing right now.
-  const mode = (await modeChar.readValue()).getUint8(0);
-  const color = await colorChar.readValue();
-  const next = { ...current, mode: mode <= 2 ? mode : MODE.rainbow, color: color.byteLength >= 3 ? toHex(color) : current.color };
+  const next = { ...current };
+  const mode = (await found.mode.readValue()).getUint8(0);
+  next.mode = mode <= MODE.twinkle ? mode : MODE.rainbow;
+  for (const key of ['color', 'color2']) {
+    if (!found[key]) continue;
+    const v = await found[key].readValue();
+    if (v.byteLength >= 3) next[key] = toHex(v);
+  }
   for (const s of SLIDERS) {
-    s.char = await service.getCharacteristic(s.uuid).catch(() => null); // missing on older firmware
-    s.supported = Boolean(s.char);
-    if (!s.char) continue;
-    const v = await s.char.readValue();
+    found[s.key] = await service.getCharacteristic(s.uuid).catch(() => null); // missing on older firmware
+    s.supported = Boolean(found[s.key]);
+    if (!found[s.key]) continue;
+    const v = await found[s.key].readValue();
     if (v.byteLength >= s.size) next[s.key] = s.size === 1 ? v.getUint8(0) : v.getUint16(0, true);
   }
+  // Changes made while reconnecting win: they are sent right after this.
+  for (const key of pending.keys()) next[key] = current[key];
+  newModes = Boolean(found.color2);
   current = next;
-  pending.clear();
+  chars = found;
   userDisconnect = false;
   setState('connected');
   render();
 }
 
+// Connect and report errors. Resolves to whether it connected.
 async function tryConnect() {
   try {
     await connect();
+    return true;
   } catch (e) {
-    if (e.name === 'NotFoundError' && !device) { setState('disconnected'); return; } // picker cancelled
-    if (device && device.gatt.connected) {
-      userDisconnect = true; // don't auto-retry
-      device.gatt.disconnect();
-    }
+    const cancelled = e.name === 'NotFoundError' && !device; // device picker closed
     setState('disconnected');
-    say(`Could not connect: ${e.message}`, true);
+    if (device && device.gatt.connected) device.gatt.disconnect();
+    if (!cancelled) say(`Could not connect: ${e.message}`, true);
+    return false;
   }
 }
 
-async function onDisconnected() {
-  modeChar = colorChar = null;
-  for (const s of SLIDERS) s.char = null;
-  pending.clear();
-  setState('disconnected');
-  if (userDisconnect || reconnecting) return;
-  // Out of range or the light rebooted: retry a few times, the light advertises again right away.
-  reconnecting = true;
-  try {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      say(`Connection lost, reconnecting (${attempt}/3)…`);
-      await new Promise((r) => setTimeout(r, 1000 * attempt));
-      if (!device || state !== 'disconnected' || userDisconnect) return;
-      try {
-        await connect();
-        say('');
-        return;
-      } catch {
-        if (device && device.gatt.connected) device.gatt.disconnect();
-        setState('disconnected');
-      }
-    }
-    say('Connection lost. Tap Reconnect.', true);
-  } finally {
-    reconnecting = false;
+// Reconnect from standby (once, however many callers). Resolves to whether it is connected.
+function wake() {
+  if (!waking && state === 'standby') waking = tryConnect().finally(() => { waking = null; });
+  return waking ?? Promise.resolve(state === 'connected');
+}
+
+function onDisconnected() {
+  // While (re)connecting, tryConnect handles failures.
+  if (state !== 'connected') return;
+  chars = {};
+  if (userDisconnect) {
+    pending.clear();
+    setState('disconnected');
+    return;
   }
+  // Dropped by the light after a while without changes, or out of range / rebooted: keep the
+  // controls and reconnect on the next change (or when the page is shown again).
+  setState('standby');
 }
 
 ui.connect.addEventListener('click', () => {
+  say('');
   if (state === 'connected') {
     userDisconnect = true;
-    say('');
     device.gatt.disconnect();
+  } else if (state === 'standby') {
+    pending.clear();
+    setState('disconnected');
   } else {
-    userDisconnect = false;
     tryConnect();
   }
 });
@@ -511,6 +635,10 @@ ui.forget.addEventListener('click', () => {
   setState('disconnected');
   say('');
   tryConnect();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state === 'standby') wake();
 });
 
 // ---------------------------------------------------------------------------

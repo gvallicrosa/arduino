@@ -48,15 +48,16 @@ cargo build --release    # build only
 
 ### Choosing the figure
 
-Each figure has a different number of LEDs. Pick one with a Cargo feature (only one at a time):
+Each figure has a different number of LEDs and its own Bluetooth name, so several lights can be
+told apart. Pick one with a Cargo feature (only one at a time):
 
-| Feature            | LEDs |
-|--------------------|-----:|
-| `dinosaur` (default) | 22 |
-| `duck`             | 20 |
-| `tanjiro`          | 18 |
-| `banyetes`         | 16 |
-| `test`             | 15 |
+| Feature              | LEDs | Bluetooth name       |
+|----------------------|-----:|----------------------|
+| `dinosaur` (default) |   22 | `led_light_dinosaur` |
+| `duck`               |   20 | `led_light_duck`     |
+| `tanjiro`            |   18 | `led_light_tanjiro`  |
+| `banyetes`           |   16 | `led_light_banyetes` |
+| `test`               |   15 | `led_light_test`     |
 
 ```sh
 cargo run --release --no-default-features --features duck
@@ -69,10 +70,14 @@ Enabling two figures at once is a compile error.
 Brightness, animation speeds and rainbow width can be changed over BLE (see below). The constants
 at the top of [`src/main.rs`](src/main.rs) set their boot values and limits:
 
-- `PULSE_PERIOD_MS`, `RAINBOW_PERIOD_MS`: duration of one cycle at speed 100 %.
+- `PULSE_PERIOD_MS`, `RAINBOW_PERIOD_MS`, `FADE_PERIOD_MS`: duration of one cycle at speed 100 %.
 - `RAINBOW_SPAN_DEFAULT`: degrees of the color wheel visible along the strip at boot (90).
 - `BRIGHTNESS_DEFAULT`: brightness at boot (25 %).
 - `PULSE_MIN`: dimmest level of the pulsating mode.
+- `TWINKLE_MIN`, `TWINKLE_MS`, `TWINKLE_GAP_MS`: twinkle background level, length of one twinkle
+  and average wait between twinkles of an LED.
+- `CANDLE_*`: how deep and how often the candle flickers.
+- `IDLE_DISCONNECT`: a connection with no writes for this long is dropped (2 min).
 
 **Brightness limit.** Brightness is a percentage of the most the power budget allows for the
 figure, so 100 % is safe on every figure. The budget is `LED_BUDGET_MA = 350` (500 mA from USB
@@ -95,19 +100,32 @@ ESP_LOG="info,trouble_host=warn" cargo run --release
 
 ## BLE protocol
 
-The device advertises as **`led_light`** with one custom service. Writes with an invalid value
-are rejected with an ATT error.
+The device advertises as **`led_light_<figure>`** (e.g. `led_light_dinosaur`) with one custom
+service. Writes with an invalid value are rejected with an ATT error.
 
 Service UUID: `937312e0-2354-11eb-9f10-fbc30a62cf38`
 
 | Characteristic | UUID | Format | Range | Boot |
 |---|---|---|---|---|
-| Mode          | `937312e0-2354-11eb-9f10-fbc30a62cf38` | u8: `0` rainbow, `1` fixed, `2` pulsating | 0-2 | `0` |
+| Mode          | `937312e0-2354-11eb-9f10-fbc30a62cf38` | u8: `0` rainbow, `1` fixed, `2` pulsating, `3` candle, `4` fade, `5` twinkle | 0-5 | `0` |
 | Color         | `987312e0-2354-11eb-9f10-fbc30a62cf38` | 3 bytes `R G B` | 0-255 each | `FF 00 00` |
+| Second color  | `9e7312e0-2354-11eb-9f10-fbc30a62cf38` | 3 bytes `R G B` | 0-255 each | `00 00 FF` |
 | Brightness    | `9a7312e0-2354-11eb-9f10-fbc30a62cf38` | u8, % of the figure's maximum | 1-100 | 25 |
 | Rainbow speed | `9b7312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, % of normal speed | 10-1000 | 100 |
 | Rainbow width | `9c7312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, degrees of the color wheel along the strip (0 = all LEDs the same color) | 0-360 | 90 |
 | Pulse speed   | `9d7312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, % of normal speed | 10-1000 | 100 |
+| Fade speed    | `9f7312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, % of normal speed | 10-1000 | 100 |
+| Twinkle speed | `a07312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, % of normal speed | 10-1000 | 100 |
+
+Modes:
+
+- **Rainbow**: the color wheel slides along the strip (speed, width).
+- **Fixed**: Color, steady.
+- **Pulsating**: Color, dimming and brightening (speed).
+- **Candle**: Color flickering like a flame, a bit redder when it dips. Looks best with a warm
+  color such as orange `FF6000`. No speed setting.
+- **Fade**: the whole figure fades from Color to Second color and back, lingering on each (speed).
+- **Twinkle**: Color, dim, with LEDs flaring up one by one like stars (speed).
 
 - All characteristics are read and write. A write with the wrong length is rejected with
   `Invalid Attribute Value Length`, a value out of range with `Value Not Allowed`.
@@ -115,7 +133,10 @@ Service UUID: `937312e0-2354-11eb-9f10-fbc30a62cf38`
 - The service and the Mode characteristic share a UUID. This is kept from the first firmware
   so existing clients keep working.
 - Nothing is saved across reboots.
-- The Color is used by the fixed and pulsating modes.
+- The Color is used by every mode but rainbow; the Second color only by fade.
+- Only one central can be connected at a time, so a connection with no writes for 2 minutes
+  (`IDLE_DISCONNECT`) is dropped and the light advertises again. A forgotten client, like a
+  computer with the web app open, can't lock the phone out.
 - Speed changes keep the animation where it is (no jump), and each mode resumes where it left off.
 - The BLE address is a static random address derived from the chip MAC, so it stays the same
   across reboots.
@@ -125,7 +146,7 @@ Service UUID: `937312e0-2354-11eb-9f10-fbc30a62cf38`
 Use the web app in [`web/`](web) (Chrome on Android, Bluefy on iPhone). For raw testing, a
 generic BLE app such as nRF Connect works too:
 
-1. Scan and connect to `led_light`.
+1. Scan and connect to `led_light_dinosaur` (or the figure's name).
 2. Open the service `937312e0-…`.
 3. Write `02` to Mode for pulsating, then `00FF00` to Color for green.
 
