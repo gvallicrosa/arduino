@@ -66,9 +66,19 @@ Enabling two figures at once is a compile error.
 
 ### Tuning
 
-Brightness, pulse range and animation speeds are constants at the top of [`src/main.rs`](src/main.rs):
-`BRIGHTNESS`, `PULSE_MIN`, `PULSE_PERIOD_MS`, `RAINBOW_PERIOD_MS`, `RAINBOW_SPAN_DEG` (how much
-of the color wheel is visible along the strip).
+Brightness, animation speeds and rainbow width can be changed over BLE (see below). The constants
+at the top of [`src/main.rs`](src/main.rs) set their boot values and limits:
+
+- `PULSE_PERIOD_MS`, `RAINBOW_PERIOD_MS`: duration of one cycle at speed 100 %.
+- `RAINBOW_SPAN_DEFAULT`: degrees of the color wheel visible along the strip at boot (90).
+- `BRIGHTNESS_DEFAULT`: brightness at boot (25 %).
+- `PULSE_MIN`: dimmest level of the pulsating mode.
+
+**Brightness limit.** Brightness is a percentage of the most the power budget allows for the
+figure, so 100 % is safe on every figure. The budget is `LED_BUDGET_MA = 350` (500 mA from USB
+minus ~150 mA for the ESP32 with BLE), assuming the worst case of every LED at full white, 60 mA
+each. With fewer LEDs the limit is higher: 100 % is 0.27 of full output on the dinosaur (22 LEDs)
+and 0.39 on the test strip (15 LEDs). Raise `LED_BUDGET_MA` if the figure has a stronger supply.
 
 LEDs are refreshed at 200 Hz (`FRAME_MS = 5`) with temporal dithering, like FastLED does: at
 low brightness each channel only has a few real levels, so the fraction is spread over successive
@@ -90,15 +100,23 @@ are rejected with an ATT error.
 
 Service UUID: `937312e0-2354-11eb-9f10-fbc30a62cf38`
 
-| Characteristic | UUID | Access | Format |
-|---|---|---|---|
-| Mode  | `937312e0-2354-11eb-9f10-fbc30a62cf38` | read, write | 1 byte: `0` rainbow, `1` fixed, `2` pulsating. Other values are rejected (`Value Not Allowed`). |
-| Color | `987312e0-2354-11eb-9f10-fbc30a62cf38` | read, write | 3 bytes: `R G B` (0-255 each). Any other length is rejected (`Invalid Attribute Value Length`). |
+| Characteristic | UUID | Format | Range | Boot |
+|---|---|---|---|---|
+| Mode          | `937312e0-2354-11eb-9f10-fbc30a62cf38` | u8: `0` rainbow, `1` fixed, `2` pulsating | 0-2 | `0` |
+| Color         | `987312e0-2354-11eb-9f10-fbc30a62cf38` | 3 bytes `R G B` | 0-255 each | `FF 00 00` |
+| Brightness    | `9a7312e0-2354-11eb-9f10-fbc30a62cf38` | u8, % of the figure's maximum | 1-100 | 25 |
+| Rainbow speed | `9b7312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, % of normal speed | 10-1000 | 100 |
+| Rainbow width | `9c7312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, degrees of the color wheel along the strip (0 = all LEDs the same color) | 0-360 | 90 |
+| Pulse speed   | `9d7312e0-2354-11eb-9f10-fbc30a62cf38` | u16 LE, % of normal speed | 10-1000 | 100 |
 
+- All characteristics are read and write. A write with the wrong length is rejected with
+  `Invalid Attribute Value Length`, a value out of range with `Value Not Allowed`.
+- u16 values are little-endian: write `C800` for 200, `6801` for 360.
 - The service and the Mode characteristic share a UUID. This is kept from the first firmware
   so existing clients keep working.
-- At boot the mode is rainbow and the color is red (`FF 00 00`). Nothing is saved across reboots.
+- Nothing is saved across reboots.
 - The Color is used by the fixed and pulsating modes.
+- Speed changes keep the animation where it is (no jump), and each mode resumes where it left off.
 - The BLE address is a static random address derived from the chip MAC, so it stays the same
   across reboots.
 

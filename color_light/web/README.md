@@ -27,8 +27,13 @@ python3 -m http.server -d color_light/web 8000   # then open http://localhost:80
 ## Behavior
 
 - Connect shows the browser's device picker, filtered to `led_light` / the light's service.
-- On connect it reads the current mode and color from the light.
+- On connect it reads the current settings from the light.
 - Picking a color while in rainbow mode switches the light to fixed (the color isn't shown in rainbow).
-- Writes are sent one at a time; while dragging the color picker only the latest color is sent.
+- Sliders: brightness (always), speed and rainbow width (rainbow mode), speed (pulsating mode).
+  Speed goes from 0.25× to 4× on a log scale. The brightness slider is quadratic so it has finer
+  steps when dim. 100 % brightness is the safe maximum for the figure (see the firmware README).
+- Lights with older firmware don't have these settings: the sliders are hidden and the rest works.
+- Writes are sent one at a time; while dragging the color picker or a slider only the latest
+  value is sent.
 - If the connection drops, it retries 3 times, then shows *Reconnect*.
 - The protocol is documented in [`../README.md`](../README.md#ble-protocol).

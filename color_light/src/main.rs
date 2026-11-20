@@ -3,15 +3,19 @@
 //! - advertises as `led_light` with one custom GATT service
 //! - `mode` characteristic (1 byte, read/write): 0 = rainbow, 1 = fixed, 2 = pulsating
 //! - `color` characteristic (3 bytes RGB, read/write): color used by fixed and pulsating modes
+//! - `brightness`, `rainbow_speed`, `rainbow_span`, `pulse_speed` characteristics (read/write),
+//!   see `LightService` and the README
 //!
 //! The LED count is chosen per figure with a cargo feature (see `Cargo.toml`).
 
 #![no_std]
 #![no_main]
 
+use core::{cell::Cell, ops::RangeInclusive};
+
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
+use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
@@ -55,17 +59,52 @@ const _: () = assert!(
         == 1,
     "enable exactly one figure feature (use --no-default-features --features <figure>)"
 );
-/// Global brightness applied to every frame (0-255).
-const BRIGHTNESS: u8 = 16;
+
+/// Current available for the LEDs: 500 mA from USB minus ~150 mA for the ESP32 with BLE.
+/// Raise it if the figure is powered from something stronger than plain USB.
+const LED_BUDGET_MA: u32 = 350;
+/// Worst case draw of one LED at full white: 20 mA per channel (WS2812B datasheet).
+const LED_FULL_WHITE_MA: u32 = 60;
+/// Output scale at 100 % brightness, in 1/65536 of full output: the most `LED_BUDGET_MA` allows
+/// with every LED at full white. Brightness is a percentage of this, so no setting can exceed
+/// the budget.
+///
+///   | figure   | LEDs | 100 % = full output x |
+///   |----------|------|-----------------------|
+///   | test     |  15  | 0.39                  |
+///   | banyetes |  16  | 0.36                  |
+///   | tanjiro  |  18  | 0.32                  |
+///   | duck     |  20  | 0.29                  |
+///   | dinosaur |  22  | 0.27                  |
+///
+/// Conservative: real LEDs often draw 12-15 mA per channel and rainbow mode has at most two
+/// channels on.
+const BRIGHTNESS_MAX_SCALE: u32 = {
+    let s = 65536 * LED_BUDGET_MA / (LED_NUM as u32 * LED_FULL_WHITE_MA);
+    if s < 65536 { s } else { 65536 }
+};
+/// Brightness at boot, in percent of `BRIGHTNESS_MAX_SCALE`. 25 % on the dinosaur is the
+/// brightness the firmware used before it was configurable; smaller figures start a bit brighter
+/// (same share of their power budget).
+const BRIGHTNESS_DEFAULT: u8 = 25;
+/// Accepted brightness values, in percent.
+const BRIGHTNESS_RANGE: RangeInclusive<u8> = 1..=100;
+
 /// Lowest value reached by the pulsating mode (0-255).
 const PULSE_MIN: u8 = 100;
-/// Duration of one full pulse (dim -> bright -> dim).
+/// Duration of one full pulse (dim -> bright -> dim) at 100 % speed.
 const PULSE_PERIOD_MS: u64 = 6_200;
-/// Duration of one full trip around the color wheel in rainbow mode.
+/// Duration of one full trip around the color wheel in rainbow mode at 100 % speed.
 const RAINBOW_PERIOD_MS: u64 = 25_600;
-/// Part of the color wheel shown along the strip in rainbow mode, in degrees (360 = whole wheel).
-/// The strip is a window over the rainbow that slides by one full wheel every `RAINBOW_PERIOD_MS`.
-const RAINBOW_SPAN_DEG: u32 = 90;
+/// Part of the color wheel shown along the strip in rainbow mode at boot, in degrees
+/// (360 = whole wheel, 0 = all LEDs the same color). The strip is a window over the rainbow that
+/// slides by one full wheel per rainbow period.
+const RAINBOW_SPAN_DEFAULT: u16 = 90;
+const RAINBOW_SPAN_RANGE: RangeInclusive<u16> = 0..=360;
+/// Animation speeds are a percentage of the periods above (200 = twice as fast).
+const SPEED_DEFAULT: u16 = 100;
+/// Accepted speeds. The upper bound also keeps `advance` from overflowing.
+const SPEED_RANGE: RangeInclusive<u16> = 10..=1000;
 /// Time between LED frames. Kept short (200 Hz) so temporal dithering is not visible.
 const FRAME_MS: u64 = 5;
 
@@ -98,8 +137,41 @@ impl Mode {
     }
 }
 
-static SIGNAL_MODE: Signal<CriticalSectionRawMutex, Mode> = Signal::new();
-static SIGNAL_COLOR: Signal<CriticalSectionRawMutex, RGB8> = Signal::new();
+/// Everything the BLE client can change. Written by the GATT handler, read by the LED task
+/// every frame.
+#[derive(Clone, Copy, Debug)]
+struct Settings {
+    mode: Mode,
+    color: RGB8,
+    /// Percent of `BRIGHTNESS_MAX_SCALE`.
+    brightness: u8,
+    /// Percent of the speed set by `RAINBOW_PERIOD_MS`.
+    rainbow_speed: u16,
+    /// Degrees of the color wheel shown along the strip.
+    rainbow_span: u16,
+    /// Percent of the speed set by `PULSE_PERIOD_MS`.
+    pulse_speed: u16,
+}
+
+/// Values at boot; they must match the initial values of `LightService`.
+static SETTINGS: Mutex<CriticalSectionRawMutex, Cell<Settings>> = Mutex::new(Cell::new(Settings {
+    mode: Mode::Rainbow,
+    color: RGB8 { r: INITIAL_COLOR[0], g: INITIAL_COLOR[1], b: INITIAL_COLOR[2] },
+    brightness: BRIGHTNESS_DEFAULT,
+    rainbow_speed: SPEED_DEFAULT,
+    rainbow_span: RAINBOW_SPAN_DEFAULT,
+    pulse_speed: SPEED_DEFAULT,
+}));
+
+fn update_settings(f: impl FnOnce(&mut Settings)) {
+    let s = SETTINGS.lock(|cell| {
+        let mut s = cell.get();
+        f(&mut s);
+        cell.set(s);
+        s
+    });
+    info!("[gatt] {s:?}");
+}
 
 // ---------------------------------------------------------------------------
 // Main: hardware setup + BLE
@@ -143,7 +215,8 @@ struct Server {
     light: LightService,
 }
 
-/// UUIDs kept from the previous firmware so existing clients keep working.
+/// Mode and color UUIDs are kept from the previous firmware so existing clients keep working.
+/// Multi-byte numbers are little-endian.
 #[gatt_service(uuid = "937312e0-2354-11eb-9f10-fbc30a62cf38")]
 struct LightService {
     #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Light Mode")]
@@ -152,6 +225,18 @@ struct LightService {
     #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Light Color")]
     #[characteristic(uuid = "987312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = INITIAL_COLOR)]
     color: [u8; 3],
+    #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Brightness (%)")]
+    #[characteristic(uuid = "9a7312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = BRIGHTNESS_DEFAULT)]
+    brightness: u8,
+    #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Rainbow Speed (%)")]
+    #[characteristic(uuid = "9b7312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = SPEED_DEFAULT)]
+    rainbow_speed: u16,
+    #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Rainbow Span (deg)")]
+    #[characteristic(uuid = "9c7312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = RAINBOW_SPAN_DEFAULT)]
+    rainbow_span: u16,
+    #[descriptor(uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION, read, value = "Pulse Speed (%)")]
+    #[characteristic(uuid = "9d7312e0-2354-11eb-9f10-fbc30a62cf38", read, write, value = SPEED_DEFAULT)]
+    pulse_speed: u16,
 }
 
 async fn ble_run<C: Controller>(controller: C) -> ! {
@@ -243,52 +328,72 @@ async fn advertise<'values, 'server, C: Controller>(
     Ok(conn)
 }
 
-/// Handle GATT requests until the central disconnects.
+/// Value written to `c`, or the ATT error to reject the write with. The length must match exactly:
+/// `[u8; N]` would otherwise accept shorter writes (zero padded).
+fn written<T: FromGatt + AsGatt, P: PacketPool>(
+    w: &WriteEvent<'_, '_, P>,
+    c: &Characteristic<T>,
+) -> Result<T, AttErrorCode> {
+    let exact = w.with_data(|offset, d| offset == 0 && d.len() == T::MAX_SIZE);
+    w.value(c)
+        .ok()
+        .filter(|_| exact)
+        .ok_or(AttErrorCode::INVALID_ATTRIBUTE_VALUE_LENGTH)
+}
+
+fn in_range<T: PartialOrd>(range: RangeInclusive<T>) -> impl FnOnce(T) -> Result<T, AttErrorCode> {
+    move |v| range.contains(&v).then_some(v).ok_or(AttErrorCode::VALUE_NOT_ALLOWED)
+}
+
+/// Handle GATT requests until the central disconnects. Valid writes update `SETTINGS` and are
+/// stored by the server (so reads return them); invalid ones are rejected and change nothing.
 async fn gatt_events<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
-    let mode = server.light.mode;
-    let color = server.light.color;
+    let light = &server.light;
     let reason = loop {
-        match conn.next().await {
+        let reply = match conn.next().await {
             GattConnectionEvent::Disconnected { reason } => break reason,
-            GattConnectionEvent::Gatt { event } => {
-                let reply = match event {
-                    GattEvent::Write(w) if w.handle() == mode.handle => {
-                        match w.value(&mode).ok().and_then(Mode::from_byte) {
-                            Some(m) => {
-                                info!("[gatt] mode {m:?}");
-                                SIGNAL_MODE.signal(m);
-                                w.accept()
-                            }
-                            None => {
-                                w.with_data(|_, d| warn!("[gatt] invalid mode {d:?}"));
-                                w.reject(AttErrorCode::VALUE_NOT_ALLOWED)
-                            }
-                        }
-                    }
-                    GattEvent::Write(w) if w.handle() == color.handle => {
-                        // [u8; 3] accepts shorter writes (zero padded), so check length explicitly.
-                        match w.with_data(|offset, d| {
-                            (offset == 0 && d.len() == 3).then(|| [d[0], d[1], d[2]])
-                        }) {
-                            Some([r, g, b]) => {
-                                info!("[gatt] color {r} {g} {b}");
-                                SIGNAL_COLOR.signal(RGB8::new(r, g, b));
-                                w.accept()
-                            }
-                            None => {
-                                w.with_data(|_, d| warn!("[gatt] invalid color {d:?}"));
-                                w.reject(AttErrorCode::INVALID_ATTRIBUTE_VALUE_LENGTH)
-                            }
-                        }
-                    }
-                    other => other.accept(),
+            GattConnectionEvent::Gatt { event: GattEvent::Write(w) } => {
+                let h = w.handle();
+                let result = if h == light.mode.handle {
+                    written(&w, &light.mode)
+                        .and_then(|m| Mode::from_byte(m).ok_or(AttErrorCode::VALUE_NOT_ALLOWED))
+                        .map(|m| update_settings(|s| s.mode = m))
+                } else if h == light.color.handle {
+                    written(&w, &light.color)
+                        .map(|[r, g, b]| update_settings(|s| s.color = RGB8::new(r, g, b)))
+                } else if h == light.brightness.handle {
+                    written(&w, &light.brightness)
+                        .and_then(in_range(BRIGHTNESS_RANGE))
+                        .map(|v| update_settings(|s| s.brightness = v))
+                } else if h == light.rainbow_speed.handle {
+                    written(&w, &light.rainbow_speed)
+                        .and_then(in_range(SPEED_RANGE))
+                        .map(|v| update_settings(|s| s.rainbow_speed = v))
+                } else if h == light.rainbow_span.handle {
+                    written(&w, &light.rainbow_span)
+                        .and_then(in_range(RAINBOW_SPAN_RANGE))
+                        .map(|v| update_settings(|s| s.rainbow_span = v))
+                } else if h == light.pulse_speed.handle {
+                    written(&w, &light.pulse_speed)
+                        .and_then(in_range(SPEED_RANGE))
+                        .map(|v| update_settings(|s| s.pulse_speed = v))
+                } else {
+                    Ok(()) // not ours: let the server validate it
                 };
-                match reply {
-                    Ok(reply) => reply.send().await,
-                    Err(e) => warn!("[gatt] error sending response: {e:?}"),
+                match result {
+                    Ok(()) => w.accept(),
+                    Err(code) => {
+                        w.with_data(|_, d| warn!("[gatt] rejected write {d:?} to handle {h}: {code:?}"));
+                        w.reject(code)
+                    }
                 }
             }
-            _ => {}
+            GattConnectionEvent::Gatt { event } => event.accept(),
+            _ => continue,
+        };
+        match reply {
+            Ok(reply) => reply.send().await,
+            Err(e) => warn!("[gatt] error sending response: {e:?}"),
         }
     };
     info!("[gatt] disconnected: {reason:?}");
@@ -345,27 +450,40 @@ fn rainbow(hue: u16) -> Rgb16 {
     }
 }
 
-/// Pulsating level (8.8 fixed point) at time `now_ms`: a triangle wave between
-/// `PULSE_MIN` and 255 with period `PULSE_PERIOD_MS`.
-fn pulse_level(now_ms: u64) -> u16 {
-    let half = PULSE_PERIOD_MS / 2;
-    let t = now_ms % PULSE_PERIOD_MS;
-    let up = if t < half { t } else { PULSE_PERIOD_MS - t }; // 0..=half
+/// Advance an animation phase (2^32 = one cycle) by `elapsed_us`, for a cycle that lasts
+/// `period_ms` at 100 % `speed`. Accumulating the phase, instead of deriving it from the clock,
+/// keeps the animation continuous when the speed changes.
+fn advance(phase: u32, elapsed_us: u64, period_ms: u64, speed: u16) -> u32 {
+    // elapsed_us <= 1 s and speed <= 1000 % keep this below 2^64.
+    let delta = (elapsed_us.min(1_000_000) << 32) * speed as u64 / (period_ms * 1000 * 100);
+    phase.wrapping_add(delta as u32) // whole cycles wrap away
+}
+
+/// Pulsating level (8.8 fixed point) at `phase`: a triangle wave from `PULSE_MIN` up to 255 and
+/// back down over one cycle.
+fn pulse_level(phase: u32) -> u16 {
+    let up = if phase < 1 << 31 { phase } else { phase.wrapping_neg() } as u64; // 0..=2^31
     let min = (PULSE_MIN as u64) << 8;
     let max = 255u64 << 8;
-    (min + (max - min) * up / half) as u16
+    (min + ((max - min) * up >> 31)) as u16
 }
 
 /// Turn the base colors into the bytes sent to the LEDs.
 ///
-/// Gamma, `level` and `BRIGHTNESS` are applied with 8 fractional bits; the fraction is then
-/// spread over successive frames (temporal dithering, `dither` keeps the per-channel error).
-/// Without this, low brightness leaves only ~16 levels per channel and fades visibly step.
-fn render(base: &[Rgb16; LED_NUM], level: u16, dither: &mut [[u8; 3]; LED_NUM]) -> [RGB8; LED_NUM] {
+/// Gamma, `level` and the brightness `scale` (1/65536 of full output) are applied with 8
+/// fractional bits; the fraction is then spread over successive frames (temporal dithering,
+/// `dither` keeps the per-channel error). Without this, low brightness leaves only ~16 levels per
+/// channel and fades visibly step.
+fn render(
+    base: &[Rgb16; LED_NUM],
+    level: u16,
+    scale: u32,
+    dither: &mut [[u8; 3]; LED_NUM],
+) -> [RGB8; LED_NUM] {
     let level = gamma_level(level);
     let channel = |x: u16, acc: &mut u8| -> u8 {
-        // 8.8 fixed point output value; max 65535 * 65535 fits in u32.
-        let v = gamma_level(x) * level / 65535 * (BRIGHTNESS as u32 + 1) / 256;
+        // 8.8 fixed point output value; 65535 * 65536 still fits in u32.
+        let v = gamma_level(x) * level / 65535 * scale / 65536;
         let sum = *acc as u32 + (v & 0xff);
         *acc = (sum & 0xff) as u8;
         ((v >> 8) + (sum >> 8)) as u8
@@ -390,8 +508,6 @@ async fn led_task(rmt: RMT<'static>, pin: GPIO33<'static>) {
         LedStrip::new_with_memsize(WS2812B_TIMING, rmt.channel0, pin, RMT_MEMSIZE, rmt_freq)
             .expect("LED strip init");
 
-    let mut mode = Mode::Rainbow;
-    let mut color = RGB8::from(INITIAL_COLOR);
     let mut base = [Rgb16::default(); LED_NUM];
     // Start each LED at a different dither phase so leftover blips don't hit all LEDs together.
     let mut dither = [[0u8; 3]; LED_NUM];
@@ -399,38 +515,44 @@ async fn led_task(rmt: RMT<'static>, pin: GPIO33<'static>) {
         *acc = [(i * 256 / LED_NUM) as u8; 3];
     }
 
-    // Hue difference between neighbouring LEDs.
-    let rainbow_offset = (RAINBOW_SPAN_DEG * 65536 / 360 / LED_NUM as u32) as u16;
+    // Animation phases only advance while their mode is shown, so switching back resumes.
+    let mut rainbow_phase = 0u32;
+    let mut pulse_phase = 0u32;
+    let mut last = Instant::now();
     let mut ticker = Ticker::every(Duration::from_millis(FRAME_MS));
 
     loop {
-        if let Some(m) = SIGNAL_MODE.try_take() {
-            mode = m;
-        }
-        if let Some(c) = SIGNAL_COLOR.try_take() {
-            color = c;
-        }
+        let s = SETTINGS.lock(Cell::get);
+        let now = Instant::now();
+        let elapsed_us = (now - last).as_micros();
+        last = now;
 
-        let now_ms = Instant::now().as_millis();
-        let level = match mode {
+        let level = match s.mode {
             Mode::Fixed => {
-                base.fill(rgb16(color));
+                base.fill(rgb16(s.color));
                 FULL
             }
             Mode::Pulsating => {
-                base.fill(rgb16(color));
-                pulse_level(now_ms)
+                pulse_phase = advance(pulse_phase, elapsed_us, PULSE_PERIOD_MS, s.pulse_speed);
+                base.fill(rgb16(s.color));
+                pulse_level(pulse_phase)
             }
             Mode::Rainbow => {
-                let hue = (now_ms * 65536 / RAINBOW_PERIOD_MS) as u16; // wraps every period
+                rainbow_phase =
+                    advance(rainbow_phase, elapsed_us, RAINBOW_PERIOD_MS, s.rainbow_speed);
+                let hue = (rainbow_phase >> 16) as u16;
+                // Hue spread over the strip, 65536 = whole wheel.
+                let span = s.rainbow_span as u32 * 65536 / 360;
                 for (i, led) in base.iter_mut().enumerate() {
-                    *led = rainbow(hue.wrapping_add(rainbow_offset.wrapping_mul(i as u16)));
+                    let offset = (span * i as u32 / LED_NUM as u32) as u16;
+                    *led = rainbow(hue.wrapping_add(offset));
                 }
                 FULL
             }
         };
 
-        let frame = render(&base, level, &mut dither);
+        let scale = BRIGHTNESS_MAX_SCALE * s.brightness as u32 / 100;
+        let frame = render(&base, level, scale, &mut dither);
         if let Err(e) = led_strip.write(frame).await {
             warn!("[led] write error: {e:?}");
         }

@@ -96,9 +96,9 @@
   .glow[data-mode="0"] .orb {
     background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
     box-shadow: 0 0 40px 12px rgba(160, 120, 255, .5);
-    animation: spin 6s linear infinite;
+    animation: spin var(--spin, 6s) linear infinite;
   }
-  .glow[data-mode="2"] .orb { animation: pulse 3.1s ease-in-out infinite alternate; }
+  .glow[data-mode="2"] .orb { animation: pulse var(--pulse, 3.1s) ease-in-out infinite alternate; }
   .glow[data-off] .orb { background: var(--border); box-shadow: none; animation: none; }
   @keyframes spin { to { transform: rotate(1turn); } }
   @keyframes pulse { from { opacity: .4; } to { opacity: 1; } }
@@ -143,7 +143,14 @@
   input[type="color"]::-webkit-color-swatch-wrapper { padding: 3px; }
   input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 7px; }
 
-  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  .setting { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 12px; margin-top: 16px; }
+  .card > .setting:first-child { margin-top: 0; }
+  .setting label { color: var(--muted); }
+  .setting output { font-family: ui-monospace, monospace; color: var(--muted); font-size: .9rem; }
+  .setting input { grid-column: 1 / -1; }
+  input[type="range"] { width: 100%; height: 32px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
   fieldset:disabled { opacity: .45; }
 
   .message { margin: 0; font-size: .9rem; color: var(--muted); min-height: 1.4em; text-align: center; }
@@ -197,6 +204,29 @@
           Pulsating
         </button>
       </div>
+      <div class="setting" id="rainbowSpeedRow">
+        <label for="rainbowSpeed">Speed</label>
+        <output id="rainbowSpeedOut" for="rainbowSpeed">1×</output>
+        <input type="range" id="rainbowSpeed" min="-100" max="100" value="0">
+      </div>
+      <div class="setting" id="rainbowSpanRow">
+        <label for="rainbowSpan">Rainbow width</label>
+        <output id="rainbowSpanOut" for="rainbowSpan">90°</output>
+        <input type="range" id="rainbowSpan" min="0" max="360" step="5" value="90">
+      </div>
+      <div class="setting" id="pulseSpeedRow">
+        <label for="pulseSpeed">Speed</label>
+        <output id="pulseSpeedOut" for="pulseSpeed">1×</output>
+        <input type="range" id="pulseSpeed" min="-100" max="100" value="0">
+      </div>
+    </section>
+
+    <section class="card" id="brightnessRow">
+      <div class="setting">
+        <label for="brightness">Brightness</label>
+        <output id="brightnessOut" for="brightness">25%</output>
+        <input type="range" id="brightness" min="10" max="100" value="50">
+      </div>
     </section>
   </fieldset>
 
@@ -225,6 +255,28 @@ const COLOR_CHAR = '987312e0-2354-11eb-9f10-fbc30a62cf38';
 const NAME = 'led_light';
 const MODE = { rainbow: 0, fixed: 1, pulsating: 2 };
 
+// Numeric settings, one slider each. `value` maps the slider position to what is sent to the
+// light and `position` maps it back, so the default sits mid-slider and both ends feel as far.
+// They are optional: older firmware doesn't have them, and their slider is then hidden.
+const speedLabel = (v) => `${+(v / 100).toPrecision(2)}×`;
+const speed = { // 25 %..400 %, logarithmic
+  size: 2,
+  value: (p) => Math.round(100 * 4 ** (p / 100)),
+  position: (v) => Math.round(100 * Math.log(v / 100) / Math.log(4)),
+  label: speedLabel,
+};
+const SLIDERS = [
+  { key: 'brightness', uuid: '9a7312e0-2354-11eb-9f10-fbc30a62cf38', size: 1, // percent of the safe maximum
+    value: (p) => Math.max(1, Math.round(p * p / 100)), // quadratic: finer steps when dim
+    position: (v) => Math.round(Math.sqrt(v * 100)),
+    label: (v) => `${v}%` },
+  { key: 'rainbowSpeed', uuid: '9b7312e0-2354-11eb-9f10-fbc30a62cf38', ...speed, mode: MODE.rainbow },
+  { key: 'rainbowSpan', uuid: '9c7312e0-2354-11eb-9f10-fbc30a62cf38', size: 2, // degrees of the color wheel
+    value: (p) => p, position: (v) => v,
+    label: (v) => (v === 0 ? '1 color' : `${v}°`), mode: MODE.rainbow },
+  { key: 'pulseSpeed', uuid: '9d7312e0-2354-11eb-9f10-fbc30a62cf38', ...speed, mode: MODE.pulsating },
+];
+
 const PRESETS = [
   '#ff0000', '#ff6000', '#ffc000', '#00ff00', '#00ffa0',
   '#00c0ff', '#0000ff', '#8000ff', '#ff00a0', '#ffffff',
@@ -237,6 +289,9 @@ const ui = {
   picker: $('picker'), hex: $('hex'), message: $('message'), unsupported: $('unsupported'),
   modeButtons: [...document.querySelectorAll('.modes button')],
 };
+for (const s of SLIDERS) {
+  Object.assign(s, { input: $(s.key), output: $(`${s.key}Out`), row: $(`${s.key}Row`), char: null, supported: true });
+}
 
 let device = null;
 let modeChar = null;
@@ -244,7 +299,8 @@ let colorChar = null;
 let state = 'disconnected';
 let userDisconnect = false;
 let reconnecting = false;
-let current = { mode: MODE.rainbow, color: '#ff0000' };
+// Firmware boot values, shown until the light is read.
+let current = { mode: MODE.rainbow, color: '#ff0000', brightness: 25, rainbowSpeed: 100, rainbowSpan: 90, pulseSpeed: 100 };
 
 // ---------------------------------------------------------------------------
 // UI
@@ -275,6 +331,14 @@ function render() {
   [...ui.swatches.children].forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.color === current.color)));
   ui.picker.value = current.color;
   ui.hex.textContent = current.color;
+  for (const s of SLIDERS) {
+    s.row.hidden = !s.supported || (s.mode !== undefined && s.mode !== current.mode);
+    s.output.textContent = s.label(current[s.key]);
+    if (document.activeElement !== s.input) s.input.value = s.position(current[s.key]);
+  }
+  // Preview animations follow the speeds (the CSS durations are for 100 %).
+  document.documentElement.style.setProperty('--spin', `${600 / current.rainbowSpeed}s`);
+  document.documentElement.style.setProperty('--pulse', `${310 / current.pulseSpeed}s`);
 }
 
 for (const c of PRESETS) {
@@ -341,6 +405,16 @@ ui.swatches.addEventListener('click', (e) => {
 });
 ui.picker.addEventListener('input', () => setColor(ui.picker.value));
 
+for (const s of SLIDERS) {
+  s.input.addEventListener('input', () => {
+    const v = s.value(Number(s.input.value));
+    if (v === current[s.key] || !s.char) return;
+    current[s.key] = v;
+    render();
+    queueWrite(s.key, s.char, new Uint8Array(s.size === 1 ? [v] : [v & 255, v >> 8])); // little-endian
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Connection
 // ---------------------------------------------------------------------------
@@ -364,7 +438,15 @@ async function connect() {
   // Show what the light is doing right now.
   const mode = (await modeChar.readValue()).getUint8(0);
   const color = await colorChar.readValue();
-  current = { mode: mode <= 2 ? mode : MODE.rainbow, color: color.byteLength >= 3 ? toHex(color) : current.color };
+  const next = { ...current, mode: mode <= 2 ? mode : MODE.rainbow, color: color.byteLength >= 3 ? toHex(color) : current.color };
+  for (const s of SLIDERS) {
+    s.char = await service.getCharacteristic(s.uuid).catch(() => null); // missing on older firmware
+    s.supported = Boolean(s.char);
+    if (!s.char) continue;
+    const v = await s.char.readValue();
+    if (v.byteLength >= s.size) next[s.key] = s.size === 1 ? v.getUint8(0) : v.getUint16(0, true);
+  }
+  current = next;
   pending.clear();
   userDisconnect = false;
   setState('connected');
@@ -387,6 +469,7 @@ async function tryConnect() {
 
 async function onDisconnected() {
   modeChar = colorChar = null;
+  for (const s of SLIDERS) s.char = null;
   pending.clear();
   setState('disconnected');
   if (userDisconnect || reconnecting) return;
